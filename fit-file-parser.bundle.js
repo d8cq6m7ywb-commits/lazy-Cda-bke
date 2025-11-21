@@ -1,14 +1,4 @@
 (function(f){if(typeof exports==="object"&&typeof module!=="undefined"){module.exports=f()}else if(typeof define==="function"&&define.amd){define([],f)}else{var g;if(typeof window!=="undefined"){g=window}else if(typeof global!=="undefined"){g=global}else if(typeof self!=="undefined"){g=self}else{g=this}g.FitParser = f()}})(function(){var define,module,exports;return (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){
-// fit-entry.js – small wrapper so Browserify can bundle fit-file-parser
-// We import the real parser file from the dist folder and expose it on window.
-
-const FitParserModule = require('fit-file-parser/dist/fit-parser.js');
-const FitParser = FitParserModule.default || FitParserModule;
-
-// Put it on the global so index.html can just use `new FitParser(...)`
-window.FitParser = FitParser;
-
-},{"fit-file-parser/dist/fit-parser.js":5}],2:[function(require,module,exports){
 'use strict'
 
 exports.byteLength = byteLength
@@ -160,7 +150,7 @@ function fromByteArray (uint8) {
   return parts.join('')
 }
 
-},{}],3:[function(require,module,exports){
+},{}],2:[function(require,module,exports){
 (function (Buffer){(function (){
 /*!
  * The buffer module from node.js, for the browser.
@@ -1941,7 +1931,7 @@ function numberIsNaN (obj) {
 }
 
 }).call(this)}).call(this,require("buffer").Buffer)
-},{"base64-js":2,"buffer":3,"ieee754":9}],4:[function(require,module,exports){
+},{"base64-js":1,"buffer":2,"ieee754":8}],3:[function(require,module,exports){
 'use strict';
 
 Object.defineProperty(exports, "__esModule", {
@@ -2386,7 +2376,7 @@ function calculateCRC(blob, start, end) {
 
     return crc;
 }
-},{"./fit":6,"./messages":8,"buffer":3}],5:[function(require,module,exports){
+},{"./fit":5,"./messages":7,"buffer":2}],4:[function(require,module,exports){
 'use strict';
 
 Object.defineProperty(exports, "__esModule", {
@@ -2648,7 +2638,7 @@ var FitParser = function () {
 }();
 
 exports.default = FitParser;
-},{"./binary":4,"./helper":7}],6:[function(require,module,exports){
+},{"./binary":3,"./helper":6}],5:[function(require,module,exports){
 'use strict';
 
 Object.defineProperty(exports, "__esModule", {
@@ -6952,7 +6942,7 @@ function getFieldObject(fieldNum, messageNum) {
   var fieldObj = message[fieldNum];
   return fieldObj ? fieldObj : {};
 }
-},{}],7:[function(require,module,exports){
+},{}],6:[function(require,module,exports){
 "use strict";
 
 Object.defineProperty(exports, "__esModule", {
@@ -7023,7 +7013,7 @@ var mapDataIntoSession = exports.mapDataIntoSession = function mapDataIntoSessio
   }
   return sessions;
 };
-},{}],8:[function(require,module,exports){
+},{}],7:[function(require,module,exports){
 'use strict';
 
 Object.defineProperty(exports, "__esModule", {
@@ -7047,7 +7037,7 @@ function getFitMessage(messageNum) {
 function getFitMessageBaseType(foo) {
   return foo;
 }
-},{"./fit":6}],9:[function(require,module,exports){
+},{"./fit":5}],8:[function(require,module,exports){
 /*! ieee754. BSD-3-Clause License. Feross Aboukhadijeh <https://feross.org/opensource> */
 exports.read = function (buffer, offset, isLE, mLen, nBytes) {
   var e, m
@@ -7134,5 +7124,5 @@ exports.write = function (buffer, value, offset, isLE, mLen, nBytes) {
   buffer[offset + i - d] |= s * 128
 }
 
-},{}]},{},[1])(1)
+},{}]},{},[4])(4)
 });
