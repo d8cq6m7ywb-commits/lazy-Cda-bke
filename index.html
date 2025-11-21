@@ -870,7 +870,7 @@ function analyseCdAFromRecords(records, env, cfg){
     const v_kmh = rec.speed*3.6;
     const grade = rec.grade || 0;
     const absGrade = Math.abs(grade);
-    const cat = (absGrade <= 0.01) ? "race" : (grade >= 0.02 ? "climb" : "other";
+    const cat = (absGrade <= 0.01) ? "race" : (grade >= 0.02 ? "climb" : "other");
 
     cdasAll.push(cda);
     if (cat === "race") raceFlat.push({cda, v_kmh});
