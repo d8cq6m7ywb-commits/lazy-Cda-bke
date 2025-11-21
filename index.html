@@ -553,18 +553,22 @@ function getEnvParamsForSamples(){
 let currentFitData = null;
 let fitScatterChart = null;
 
-// Use the constructor exposed by bundle.js as window.FitParser
 function resolveFitParserCtor(){
-  const fp = window.FitParser;
-  if (!fp){
-    console.error("FitParser global not found on window:", fp);
-    return null;
-  }
-  if (typeof fp === "function") return fp;
-  if (fp && typeof fp.default === "function") return fp.default;
+  const w = window;
+  const fromDirect = w.FitParser;
+  const fromFitObj = w.FIT && w.FIT.FitParser;
 
-  console.error("FitParser global exists but is not a constructor:", fp);
-  return null;
+  const ctor = (typeof fromDirect === "function") ? fromDirect :
+               (typeof fromFitObj === "function") ? fromFitObj :
+               null;
+
+  if (!ctor){
+    console.error("FitParser global not found on window:", {
+      FitParser: w.FitParser,
+      FIT: w.FIT
+    });
+  }
+  return ctor;
 }
 
 function handleFitFileSelect(evt){
@@ -615,9 +619,6 @@ function handleFitFileSelect(evt){
           currentFitData = null;
           return;
         }
-
-        console.log("RAW FIT data:", data); // debug helper
-
         currentFitData = normaliseFitDataFromFitParser(data);
         statusEl.textContent = `Parsed ${currentFitData.records.length} records, ${currentFitData.laps.length} laps.`;
         renderLapTable(currentFitData.laps);
@@ -651,11 +652,11 @@ function normaliseRecord(r){
 
   return {
     t: ts,
-    distance: dist,       // meters
-    speed: speed,         // m/s
-    altitude: alt,        // m
-    power: power,         // W
-    cadence: cadence,     // rpm
+    distance: dist,
+    speed: speed,
+    altitude: alt,
+    power: power,
+    cadence: cadence,
     grade: 0
   };
 }
@@ -671,16 +672,22 @@ function addGradeFromAlt(records){
   records[0].grade = records[1].grade;
 }
 
-// *** SIMPLIFIED normaliser: laps if present, else single lap from top-level records ***
 function normaliseFitDataFromFitParser(data){
-  console.log("FIT raw data keys:", Object.keys(data || {}));
-  console.log("FIT laps:", data && data.laps, "records:", data && (data.records || data.record));
+  // Try multiple shapes to be robust
+  let lapsRaw = [];
+  if (Array.isArray(data.laps)) {
+    lapsRaw = data.laps;
+  } else if (Array.isArray(data.sessions)) {
+    data.sessions.forEach(s => {
+      if (Array.isArray(s.laps)) lapsRaw.push(...s.laps);
+    });
+  } else if (data.session && Array.isArray(data.session.laps)) {
+    lapsRaw = data.session.laps;
+  }
 
   const laps = [];
   const allRecords = [];
 
-  // Primary: use data.laps if present
-  const lapsRaw = Array.isArray(data.laps) ? data.laps : [];
   lapsRaw.forEach((lap, idx) => {
     const lapRecsRaw = Array.isArray(lap.records) ? lap.records : [];
     const lapRecords = lapRecsRaw.map(normaliseRecord);
@@ -705,21 +712,22 @@ function normaliseFitDataFromFitParser(data){
     allRecords.push(...lapRecords);
   });
 
-  // Fallback: treat whole file as one lap if we only have top-level records
-  if (!laps.length){
-    const recsTop = Array.isArray(data.records)
-      ? data.records
-      : (Array.isArray(data.record) ? data.record : []);
-
-    if (recsTop.length){
-      const rootRecs = recsTop.map(normaliseRecord);
+  // Fallback if no laps but we do have top-level records
+  if (!laps.length) {
+    let recs = [];
+    if (Array.isArray(data.records)) {
+      recs = data.records;
+    } else if (Array.isArray(data.record)) {
+      recs = data.record;
+    }
+    if (recs.length) {
+      const rootRecs = recs.map(normaliseRecord);
       addGradeFromAlt(rootRecs);
-
       laps.push({
         index: 0,
         displayIndex: 1,
         use: true,
-        totalDistance: rootRecs[rootRecs.length - 1]?.distance ?? null,
+        totalDistance: rootRecs[rootRecs.length-1]?.distance ?? null,
         totalTimerTime: null,
         avgSpeed: null,
         avgPower: null,
@@ -891,7 +899,8 @@ function analyseCdAFromRecords(records, env, cfg){
     const v_kmh = rec.speed*3.6;
     const grade = rec.grade || 0;
     const absGrade = Math.abs(grade);
-    const cat = (absGrade <= 0.01) ? "race" : (grade >= 0.02 ? "climb" : "other";
+
+    const cat = (absGrade <= 0.01) ? "race" : (grade >= 0.02 ? "climb" : "other");
 
     cdasAll.push(cda);
     if (cat === "race") raceFlat.push({cda, v_kmh});
