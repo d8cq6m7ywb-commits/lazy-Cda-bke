@@ -575,7 +575,25 @@ function resolveFitParserCtor(){
     return fp.default;
   }
 
-  console.error("FitParser global exists but is not a constructor or default-exported constructor:", fp);
+  // Case 3: bundle exposed { FitParser: constructor }
+  if (fp && typeof fp.FitParser === "function") {
+    return fp.FitParser;
+  }
+
+  // Fallback: look for the first function-valued own property
+  const names = Object.getOwnPropertyNames(fp);
+  for (const name of names) {
+    const val = fp[name];
+    if (typeof val === "function") {
+      console.warn("Using FitParser constructor from window.FitParser['" + name + "'].");
+      return val;
+    }
+  }
+
+  console.error(
+    "FitParser global exists but no usable constructor found. Props:",
+    Object.getOwnPropertyNames(fp)
+  );
   return null;
 }
 function handleFitFileSelect(evt){
