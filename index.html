@@ -368,8 +368,9 @@ hr.section-split{
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <!-- IMPORTANT: add a browser build of fit-file-parser to your repo as fit-file-parser.js and include it here.
      For example, copy dist/fit-file-parser.js from https://github.com/jimmykane/fit-parser into this folder. -->
-<script src="fit-file-parser.js"></script>
-
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="fit-file-parser.bundle.js"></script>
+  
 <script>
 // ---------- SINGLE-POINT CDA CALCULATOR (unchanged logic) ----------
 function switchUnit(){ calculateResult(); }
@@ -555,15 +556,12 @@ function getEnvParamsForSamples(){
 // ---------- FIT FILE CDA ANALYZER ----------
 let currentFitData = null;
 let fitScatterChart = null;
-
+  
 function resolveFitParserCtor(){
-  // Try a couple of possible globals depending on how the dist bundle exposes it
+  // FitParser is attached to window by fit-file-parser.bundle.js
   if (window.FitParser) return window.FitParser;
-  if (window.fitFileParser && window.fitFileParser.default) return window.fitFileParser.default;
-  if (window.fitFileParser && typeof window.fitFileParser === "function") return window.fitFileParser;
   return null;
 }
-
 function handleFitFileSelect(evt){
   const file = evt.target.files && evt.target.files[0];
   const statusEl = document.getElementById("fitStatus");
