@@ -673,11 +673,13 @@ function addGradeFromAlt(records){
 }
 
 /**
- * SUPER-ROBUST normaliser:
- * Recursively collects every `records` / `record` array anywhere in the parsed FIT object,
- * then builds one synthetic lap containing all records.
+ * Normaliser:
+ * 1) Collects all records into a flat array.
+ * 2) Tries to reconstruct laps from Garmin lap data (if present).
+ * 3) Falls back to a single synthetic lap if no usable laps found.
  */
 function normaliseFitDataFromFitParser(data){
+  // --- collect all records anywhere in the parsed object ---
   function collectAllRecords(node, out){
     if (!node || typeof node !== "object") return;
     if (Array.isArray(node)){
@@ -703,45 +705,178 @@ function normaliseFitDataFromFitParser(data){
     addGradeFromAlt(records);
   }
 
-  const laps = [];
+  // --- collect lap-like objects if they exist ---
+  function looksLikeLap(obj){
+    if (!obj || typeof obj !== "object") return false;
+    const hasDist = ("total_distance" in obj) || ("total_timer_distance" in obj);
+    const hasTime = ("total_timer_time" in obj) || ("start_time" in obj) || ("timestamp" in obj);
+    return hasDist && hasTime;
+  }
+
+  function collectLapCandidates(node, out){
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)){
+      for (const item of node) collectLapCandidates(item, out);
+      return;
+    }
+    for (const key in node){
+      if (!Object.prototype.hasOwnProperty.call(node, key)) continue;
+      const val = node[key];
+      if (Array.isArray(val) && (key === "laps" || key === "lap")){
+        val.forEach(v => { if (looksLikeLap(v)) out.push(v); });
+      } else if (typeof val === "object" && val){
+        collectLapCandidates(val, out);
+      }
+    }
+  }
+
+  const lapCandidates = [];
+  collectLapCandidates(data, lapCandidates);
+
+  let laps = [];
 
   if (records.length){
-    const first = records[0];
-    const last  = records[records.length - 1];
+    if (lapCandidates.length >= 2){
+      // build laps from candidates
+      const normLaps = lapCandidates.map((lap) => {
+        const startRaw = lap.start_time || lap.timestamp || null;
+        const start = startRaw ? new Date(startRaw) : null;
+        const tt = toNumber(lap.total_timer_time);
+        let end = null;
+        if (start && tt != null) {
+          end = new Date(start.getTime() + tt*1000);
+        }
 
-    let totalDistance = null;
-    if (last.distance != null){
-      if (first.distance != null && last.distance >= first.distance){
-        totalDistance = last.distance - first.distance;
-      } else {
-        totalDistance = last.distance;
+        const totalDistance =
+          toNumber(lap.total_distance) ??
+          toNumber(lap.total_timer_distance) ??
+          null;
+
+        const avgSpeed = toNumber(lap.avg_speed) ?? null;   // m/s
+        const avgPower = toNumber(lap.avg_power) ?? null;
+
+        return {
+          start,
+          end,
+          totalDistance,
+          totalTimerTime: tt,
+          avgSpeed,
+          avgPower
+        };
+      }).filter(l => l.start);
+
+      // sort by start time
+      normLaps.sort((a,b) => a.start - b.start);
+
+      // fill missing ends from next start or last record
+      for (let i=0; i<normLaps.length; i++){
+        if (!normLaps[i].end){
+          const next = normLaps[i+1];
+          if (next && next.start){
+            normLaps[i].end = new Date(next.start.getTime() - 1000);
+          }
+        }
       }
-    }
-
-    let totalTimerTime = null;
-    if (first.t && last.t){
-      totalTimerTime = (last.t - first.t) / 1000; // seconds
-    }
-
-    let sumP = 0, nP = 0;
-    for (const r of records){
-      if (r.power != null && isFinite(r.power)){
-        sumP += r.power;
-        nP++;
+      const lastRecTime = records.length ? records[records.length-1].t : null;
+      const lastLap = normLaps[normLaps.length-1];
+      if (lastLap && !lastLap.end && lastRecTime){
+        lastLap.end = lastRecTime;
       }
-    }
-    const avgPower = nP ? sumP / nP : null;
 
-    laps.push({
-      index: 0,
-      displayIndex: 1,
-      use: true,
-      totalDistance: totalDistance,
-      totalTimerTime: totalTimerTime,
-      avgSpeed: null,
-      avgPower: avgPower,
-      records: records
-    });
+      // map records into each lap
+      laps = normLaps.map((lap, idx) => {
+        const lapRecs = records.filter(r =>
+          r.t && lap.start && lap.end && r.t >= lap.start && r.t <= lap.end
+        );
+
+        let totalDistance = lap.totalDistance;
+        if (lapRecs.length && totalDistance == null){
+          const firstD = lapRecs[0].distance;
+          const lastD  = lapRecs[lapRecs.length-1].distance;
+          if (lastD != null){
+            totalDistance =
+              (firstD != null && lastD >= firstD) ? (lastD - firstD) : lastD;
+          }
+        }
+
+        let totalTimerTime = lap.totalTimerTime;
+        if (lapRecs.length && (!isFinite(totalTimerTime) || totalTimerTime == null)){
+          const firstT = lapRecs[0].t;
+          const lastT  = lapRecs[lapRecs.length-1].t;
+          if (firstT && lastT){
+            totalTimerTime = (lastT - firstT)/1000;
+          }
+        }
+
+        let avgPower = lap.avgPower;
+        if (lapRecs.length && (!isFinite(avgPower) || avgPower == null)){
+          let sumP=0, nP=0;
+          for (const r of lapRecs){
+            if (r.power != null && isFinite(r.power)){
+              sumP += r.power; nP++;
+            }
+          }
+          avgPower = nP ? sumP/nP : null;
+        }
+
+        let avgSpeed = lap.avgSpeed;
+        if ((avgSpeed == null || !isFinite(avgSpeed)) &&
+            totalTimerTime && totalDistance){
+          avgSpeed = totalDistance / totalTimerTime; // m/s
+        }
+
+        return {
+          index: idx,
+          displayIndex: idx+1,
+          use: true,
+          totalDistance,
+          totalTimerTime,
+          avgSpeed,
+          avgPower,
+          records: lapRecs
+        };
+      }).filter(l => l.records.length > 0);
+    }
+
+    // Fallback: single synthetic lap if we didn't get any usable lap splits
+    if (!laps.length){
+      const first = records[0];
+      const last  = records[records.length - 1];
+
+      let totalDistance = null;
+      if (last.distance != null){
+        if (first.distance != null && last.distance >= first.distance){
+          totalDistance = last.distance - first.distance;
+        } else {
+          totalDistance = last.distance;
+        }
+      }
+
+      let totalTimerTime = null;
+      if (first.t && last.t){
+        totalTimerTime = (last.t - first.t) / 1000; // seconds
+      }
+
+      let sumP = 0, nP = 0;
+      for (const r of records){
+        if (r.power != null && isFinite(r.power)){
+          sumP += r.power;
+          nP++;
+        }
+      }
+      const avgPower = nP ? sumP / nP : null;
+
+      laps.push({
+        index: 0,
+        displayIndex: 1,
+        use: true,
+        totalDistance: totalDistance,
+        totalTimerTime: totalTimerTime,
+        avgSpeed: null,
+        avgPower: avgPower,
+        records: records
+      });
+    }
   }
 
   return { laps, records };
