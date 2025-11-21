@@ -557,18 +557,25 @@ let currentFitData = null;
 let fitScatterChart = null;
   
 function resolveFitParserCtor(){
-  const mod = window.FitParser;
-  if (!mod) return null;
+  // FitParser global created by fit-file-parser.bundle.js
+  const fp = window.FitParser;
 
-  // If the global itself is a constructor
-  if (typeof mod === "function") return mod;
+  if (!fp) {
+    console.error("FitParser global not found on window:", fp);
+    return null;
+  }
 
-  // If browserify/UMD wrapped it as a default export
-  if (typeof mod.default === "function") return mod.default;
+  // Case 1: bundle exposed the constructor directly
+  if (typeof fp === "function") {
+    return fp;
+  }
 
-  // If it was nested as a property
-  if (typeof mod.FitParser === "function") return mod.FitParser;
+  // Case 2: bundle exposed { default: constructor }
+  if (fp && typeof fp.default === "function") {
+    return fp.default;
+  }
 
+  console.error("FitParser global exists but is not a constructor or default-exported constructor:", fp);
   return null;
 }
 function handleFitFileSelect(evt){
