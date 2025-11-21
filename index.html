@@ -673,173 +673,76 @@ function addGradeFromAlt(records){
 }
 
 /**
- * Normalise FIT data:
- * - Flatten record stream.
- * - If lap messages exist, slice records into per-lap arrays using start/end times.
- * - If no laps, fall back to one synthetic lap over the whole file.
+ * Lap-aware normaliser:
+ *  - Prefer real Garmin laps (from the lap button) wherever present.
+ *  - Fall back to a single synthetic lap if the file has records but no laps.
  */
 function normaliseFitDataFromFitParser(data){
-  // 1) Flatten all records we can find
-  let rawRecords = [];
-
-  if (Array.isArray(data.records)) {
-    rawRecords = rawRecords.concat(data.records);
-  }
-  if (Array.isArray(data.record)) {
-    rawRecords = rawRecords.concat(data.record);
-  }
-  if (Array.isArray(data.sessions)) {
-    data.sessions.forEach(s => {
-      if (Array.isArray(s.records)) {
-        rawRecords = rawRecords.concat(s.records);
-      }
-    });
-  }
-  if (!rawRecords.length && data.activity && Array.isArray(data.activity.records)) {
-    rawRecords = rawRecords.concat(data.activity.records);
-  }
-
-  const records = rawRecords.map(normaliseRecord);
-  if (records.length) {
-    addGradeFromAlt(records);
-  }
-
-  // 2) Collect lap meta messages (from LAP button etc.)
-  let lapMetas = [];
+  // Try multiple shapes to be robust
+  let lapsRaw = [];
   if (Array.isArray(data.laps)) {
-    lapMetas = lapMetas.concat(data.laps);
-  }
-  if (Array.isArray(data.sessions)) {
+    lapsRaw = data.laps;
+  } else if (Array.isArray(data.sessions)) {
     data.sessions.forEach(s => {
-      if (Array.isArray(s.laps)) {
-        lapMetas = lapMetas.concat(s.laps);
-      }
+      if (Array.isArray(s.laps)) lapsRaw.push(...s.laps);
     });
-  }
-  if (data.session && Array.isArray(data.session.laps)) {
-    lapMetas = lapMetas.concat(data.session.laps);
+  } else if (data.session && Array.isArray(data.session.laps)) {
+    lapsRaw = data.session.laps;
   }
 
   const laps = [];
+  const allRecords = [];
 
-  if (lapMetas.length && records.length) {
-    // sort records by time (just in case)
-    const recsSorted = records.slice().sort((a, b) => {
-      if (!a.t || !b.t) return 0;
-      return a.t - b.t;
-    });
+  lapsRaw.forEach((lap, idx) => {
+    const lapRecsRaw = Array.isArray(lap.records) ? lap.records : [];
+    const lapRecords = lapRecsRaw.map(normaliseRecord);
+    addGradeFromAlt(lapRecords);
 
-    lapMetas.forEach((lap, idx) => {
-      const startTs = lap.start_time ? new Date(lap.start_time) : null;
-
-      let endTs = lap.end_time ? new Date(lap.end_time) : null;
-      const tt = toNumber(lap.total_timer_time);
-      if (!endTs && startTs && tt != null) {
-        endTs = new Date(startTs.getTime() + tt * 1000);
-      }
-
-      // Assign records to this lap by timestamp range
-      const lapRecords = recsSorted.filter(r => {
-        if (!r.t) return false;
-        if (startTs && r.t < startTs) return false;
-        if (endTs && r.t >= endTs) return false;
-        return true;
-      });
-
-      if (!lapRecords.length) return; // skip empty laps
-
-      const first = lapRecords[0];
-      const last  = lapRecords[lapRecords.length - 1];
-
-      // Distance (m)
-      let totalDistance = toNumber(lap.total_distance) ?? toNumber(lap.total_distance_m);
-      if (totalDistance == null && last.distance != null) {
-        if (first.distance != null && last.distance >= first.distance) {
-          totalDistance = last.distance - first.distance;
-        } else {
-          totalDistance = last.distance;
-        }
-      }
-
-      // Time (s)
-      let totalTimerTime = tt;
-      if (totalTimerTime == null && first.t && last.t) {
-        totalTimerTime = (last.t - first.t) / 1000;
-      }
-
-      // Avg speed (m/s)
-      let avgSpeed = toNumber(lap.avg_speed);
-      if (avgSpeed == null && totalDistance != null && totalTimerTime != null && totalTimerTime > 0) {
-        avgSpeed = totalDistance / totalTimerTime;
-      }
-
-      // Avg power (W)
-      let avgPower = toNumber(lap.avg_power);
-      if (avgPower == null) {
-        let sumP = 0, nP = 0;
-        lapRecords.forEach(r => {
-          if (r.power != null && isFinite(r.power)) {
-            sumP += r.power;
-            nP++;
-          }
-        });
-        if (nP) avgPower = sumP / nP;
-      }
-
-      laps.push({
-        index: idx,
-        displayIndex: idx + 1,
-        use: true,
-        totalDistance,
-        totalTimerTime,
-        avgSpeed,
-        avgPower,
-        records: lapRecords
-      });
-    });
-  }
-
-  // 3) Fallback: if no laps or we couldn’t match records, use one big lap
-  if (!laps.length && records.length) {
-    const first = records[0];
-    const last  = records[records.length - 1];
-
-    let totalDistance = null;
-    if (last.distance != null) {
-      if (first.distance != null && last.distance >= first.distance) {
-        totalDistance = last.distance - first.distance;
-      } else {
-        totalDistance = last.distance;
-      }
-    }
-
-    let totalTimerTime = null;
-    if (first.t && last.t) {
-      totalTimerTime = (last.t - first.t) / 1000;
-    }
-
-    let sumP = 0, nP = 0;
-    records.forEach(r => {
-      if (r.power != null && isFinite(r.power)) {
-        sumP += r.power;
-        nP++;
-      }
-    });
-    const avgPower = nP ? sumP / nP : null;
+    const total_distance = toNumber(lap.total_distance) ?? toNumber(lap.total_distance_m);
+    const total_timer_time = toNumber(lap.total_timer_time);
+    const avg_speed = toNumber(lap.avg_speed);
+    const avg_power = toNumber(lap.avg_power);
 
     laps.push({
-      index: 0,
-      displayIndex: 1,
+      index: idx,
+      displayIndex: idx + 1,
       use: true,
-      totalDistance,
-      totalTimerTime,
-      avgSpeed: null,
-      avgPower,
-      records
+      totalDistance: total_distance,
+      totalTimerTime: total_timer_time,
+      avgSpeed: avg_speed,
+      avgPower: avg_power,
+      records: lapRecords
     });
+
+    allRecords.push(...lapRecords);
+  });
+
+  // Fallback if no laps but we do have top-level records
+  if (!laps.length) {
+    let recs = [];
+    if (Array.isArray(data.records)) {
+      recs = data.records;
+    } else if (Array.isArray(data.record)) {
+      recs = data.record;
+    }
+    if (recs.length) {
+      const rootRecs = recs.map(normaliseRecord);
+      addGradeFromAlt(rootRecs);
+      laps.push({
+        index: 0,
+        displayIndex: 1,
+        use: true,
+        totalDistance: rootRecs[rootRecs.length-1]?.distance ?? null,
+        totalTimerTime: null,
+        avgSpeed: null,
+        avgPower: null,
+        records: rootRecs
+      });
+      allRecords.push(...rootRecs);
+    }
   }
 
-  return { laps, records };
+  return { laps, records: allRecords };
 }
 
 function renderLapTable(laps){
