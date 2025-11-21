@@ -366,6 +366,7 @@ hr.section-split{
 
 <!-- External libs -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<!-- Bundle produced from fit-entry.js (fit-file-parser via browserify) -->
 <script src="bundle.js"></script>
 
 <script>
@@ -461,7 +462,6 @@ function calculateResult(){
 document.addEventListener("DOMContentLoaded", function(){
   resetValues();
 
-  // Wire FIT file input if present
   const fitInput = document.getElementById("fitFileInput");
   if (fitInput) {
     fitInput.addEventListener("change", handleFitFileSelect);
@@ -511,7 +511,7 @@ function getEnvParamsForSamples(){
   let clothesGear=+document.getElementById("clothes-gear-kg").value||0;
   let bikeWeight=+document.getElementById("bike-weight-kg").value||0;
 
-  let wind=+document.getElementById("wind-kmh").value||0; // headwind +, tailwind -
+  let wind=+document.getElementById("wind-kmh").value||0;
   let crr=+document.getElementById("crr_rolling").value||0.0036;
   let drivetrainEff=(+document.getElementById("driveTrainEfficiency").value||98)/100;
 
@@ -523,7 +523,6 @@ function getEnvParamsForSamples(){
   const totalMass=riderWeight+clothesGear+bikeWeight;
   const g=9.80665;
 
-  // Atmosphere
   const P0=101325, T0=288.15, L=0.0065, M=0.0289652, R=8.314462618;
   const Tkelvin=tempC+273.15;
   const pressurePa=(pressureOverride>0) ? pressureOverride*100 : P0*Math.pow(1-(L*altitude)/T0,(g*M)/(R*L));
@@ -555,15 +554,21 @@ let currentFitData = null;
 let fitScatterChart = null;
 
 function resolveFitParserCtor(){
-  const fp = window.FitParser;
-  if (!fp) {
-    console.error("FitParser global not found on window:", fp);
-    return null;
+  const w = window;
+  const fromDirect = w.FitParser;
+  const fromFitObj = w.FIT && w.FIT.FitParser;
+
+  const ctor = (typeof fromDirect === "function") ? fromDirect :
+               (typeof fromFitObj === "function") ? fromFitObj :
+               null;
+
+  if (!ctor){
+    console.error("FitParser global not found on window:", {
+      FitParser: w.FitParser,
+      FIT: w.FIT
+    });
   }
-  if (typeof fp === "function") return fp;
-  if (fp && typeof fp.default === "function") return fp.default;
-  console.error("FitParser global exists but is not a constructor or default-exported constructor:", fp);
-  return null;
+  return ctor;
 }
 
 function handleFitFileSelect(evt){
@@ -587,7 +592,7 @@ function handleFitFileSelect(evt){
 
   const FitParserCtor = resolveFitParserCtor();
   if (!FitParserCtor) {
-    statusEl.textContent = "FIT parser not found. Make sure bundle.js is loading correctly.";
+    statusEl.textContent = "FIT parser not found (bundle.js).";
     currentFitData = null;
     return;
   }
@@ -647,11 +652,11 @@ function normaliseRecord(r){
 
   return {
     t: ts,
-    distance: dist,       // meters
-    speed: speed,         // m/s
-    altitude: alt,        // m
-    power: power,         // W
-    cadence: cadence,     // rpm
+    distance: dist,
+    speed: speed,
+    altitude: alt,
+    power: power,
+    cadence: cadence,
     grade: 0
   };
 }
@@ -668,7 +673,18 @@ function addGradeFromAlt(records){
 }
 
 function normaliseFitDataFromFitParser(data){
-  const lapsRaw = Array.isArray(data.laps) ? data.laps : [];
+  // Try multiple shapes to be robust
+  let lapsRaw = [];
+  if (Array.isArray(data.laps)) {
+    lapsRaw = data.laps;
+  } else if (Array.isArray(data.sessions)) {
+    data.sessions.forEach(s => {
+      if (Array.isArray(s.laps)) lapsRaw.push(...s.laps);
+    });
+  } else if (data.session && Array.isArray(data.session.laps)) {
+    lapsRaw = data.session.laps;
+  }
+
   const laps = [];
   const allRecords = [];
 
@@ -696,21 +712,29 @@ function normaliseFitDataFromFitParser(data){
     allRecords.push(...lapRecords);
   });
 
-  // Fallback: if there are no laps but there are root records
-  if (laps.length === 0 && Array.isArray(data.records)){
-    const rootRecs = data.records.map(normaliseRecord);
-    addGradeFromAlt(rootRecs);
-    laps.push({
-      index: 0,
-      displayIndex: 1,
-      use: true,
-      totalDistance: rootRecs[rootRecs.length-1]?.distance ?? null,
-      totalTimerTime: null,
-      avgSpeed: null,
-      avgPower: null,
-      records: rootRecs
-    });
-    allRecords.push(...rootRecs);
+  // Fallback if no laps but we do have top-level records
+  if (!laps.length) {
+    let recs = [];
+    if (Array.isArray(data.records)) {
+      recs = data.records;
+    } else if (Array.isArray(data.record)) {
+      recs = data.record;
+    }
+    if (recs.length) {
+      const rootRecs = recs.map(normaliseRecord);
+      addGradeFromAlt(rootRecs);
+      laps.push({
+        index: 0,
+        displayIndex: 1,
+        use: true,
+        totalDistance: rootRecs[rootRecs.length-1]?.distance ?? null,
+        totalTimerTime: null,
+        avgSpeed: null,
+        avgPower: null,
+        records: rootRecs
+      });
+      allRecords.push(...rootRecs);
+    }
   }
 
   return { laps, records: allRecords };
@@ -742,9 +766,9 @@ function renderLapTable(laps){
     // Compute average speed from dist/time where possible
     let lapSpeedKmh = null;
     if (distKm != null && timeMin != null && timeMin > 0.01) {
-      lapSpeedKmh = distKm / (timeMin / 60); // km / h
+      lapSpeedKmh = distKm / (timeMin / 60); // km/h
     } else if (lap.avgSpeed != null) {
-      // Fallback: assume avgSpeed is m/s
+      // Assume avgSpeed is in m/s as per fit-file-parser options
       lapSpeedKmh = lap.avgSpeed * 3.6;
     }
 
@@ -783,7 +807,6 @@ function runFitAnalysis(){
     maxCdA: 0.50
   };
 
-  // Collect records from selected laps
   let records = [];
   if (mode === "laps"){
     const checkboxes = document.querySelectorAll(".lap-use");
@@ -800,7 +823,6 @@ function runFitAnalysis(){
       }
     });
   } else {
-    // race mode: all laps that passed default "use" threshold
     const checkboxes = document.querySelectorAll(".lap-use");
     const idxSet = new Set();
     checkboxes.forEach(cb => {
@@ -810,7 +832,6 @@ function runFitAnalysis(){
       }
     });
     if (idxSet.size === 0){
-      // if user unticked everything, fall back to all
       records = currentFitData.records.slice();
     } else {
       currentFitData.laps.forEach(lap => {
@@ -844,7 +865,7 @@ function isUsableRecord(rec, cfg){
 }
 
 function computeCdAForRecord(rec, env){
-  const v_g = rec.speed;          // m/s
+  const v_g = rec.speed;
   const v_air = Math.max(0, v_g + env.windMs);
   if (v_g <= 0 || v_air <= 0) return NaN;
 
@@ -866,8 +887,8 @@ function computeCdAForRecord(rec, env){
 
 function analyseCdAFromRecords(records, env, cfg){
   const cdasAll = [];
-  const raceFlat = [];       // |grade| <= 1%
-  const climbRelaxed = [];   // grade >= 2%
+  const raceFlat = [];
+  const climbRelaxed = [];
   const points = [];
 
   for (const rec of records){
@@ -884,13 +905,8 @@ function analyseCdAFromRecords(records, env, cfg){
     if (cat === "race") raceFlat.push({cda, v_kmh});
     if (cat === "climb") climbRelaxed.push({cda, v_kmh});
 
-    // for plotting: keep only reasonable number of points
     if (points.length < 4000){
-      points.push({
-        cda,
-        v_kmh,
-        cat
-      });
+      points.push({ cda, v_kmh, cat });
     }
   }
 
@@ -908,7 +924,6 @@ function analyseCdAFromRecords(records, env, cfg){
   const raceSummary = summarise(raceFlat);
   const climbSummary = summarise(climbRelaxed);
 
-  // Also compute high-speed-only summaries (>=24 km/h)
   function summariseHighSpeed(list){
     const filtered = list.filter(p => p.v_kmh >= 24);
     if (!filtered.length) return {n:0, median:null, p25:null, p75:null};
@@ -950,31 +965,11 @@ function renderFitAnalysis(a, summaryEl, statsTable, statsBody){
     `Race flat samples: ${a.raceSummary.n}, climb samples: ${a.climbSummary.n}.</span>`;
 
   const rows = [
-    {
-      label: "All usable",
-      s: a.allSummary,
-      note: "all grades"
-    },
-    {
-      label: "Race / flat",
-      s: a.raceSummary,
-      note: "|grade| ≤ 1%"
-    },
-    {
-      label: "Race / flat, ≥24 km/h",
-      s: a.raceHigh,
-      note: "subset of race"
-    },
-    {
-      label: "Climb / relaxed",
-      s: a.climbSummary,
-      note: "grade ≥ 2%"
-    },
-    {
-      label: "Climb / relaxed, ≥24 km/h",
-      s: a.climbHigh,
-      note: "subset of climb"
-    }
+    { label: "All usable",              s: a.allSummary,  note: "all grades" },
+    { label: "Race / flat",            s: a.raceSummary, note: "|grade| ≤ 1%" },
+    { label: "Race / flat, ≥24 km/h",  s: a.raceHigh,    note: "subset of race" },
+    { label: "Climb / relaxed",        s: a.climbSummary,note: "grade ≥ 2%" },
+    { label: "Climb / relaxed, ≥24 km/h", s: a.climbHigh,note: "subset of climb" }
   ];
 
   statsBody.innerHTML = "";
@@ -1008,32 +1003,16 @@ function renderFitScatter(points){
     type: "scatter",
     data: {
       datasets: [
-        {
-          label: "Race / flat",
-          data: racePoints,
-          pointRadius: 2
-        },
-        {
-          label: "Climb / relaxed",
-          data: climbPoints,
-          pointRadius: 2
-        }
+        { label: "Race / flat",  data: racePoints,  pointRadius: 2 },
+        { label: "Climb / relaxed", data: climbPoints, pointRadius: 2 }
       ]
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       scales: {
-        x: {
-          type: "linear",
-          title: {display:true,text:"Speed (km/h)"},
-          ticks: {stepSize:5}
-        },
-        y: {
-          title: {display:true,text:"CdA"},
-          suggestedMin:0.15,
-          suggestedMax:0.5
-        }
+        x: { type: "linear", title: {display:true,text:"Speed (km/h)"}, ticks: {stepSize:5} },
+        y: { title: {display:true,text:"CdA"}, suggestedMin:0.15, suggestedMax:0.5 }
       },
       plugins: {
         legend: {position:"top"},
