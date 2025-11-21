@@ -1,8 +1,13 @@
-// fit-entry.js – small wrapper so Browserify can bundle fit-file-parser
-// We import the real parser file from the dist folder and expose it on window.
+// fit-entry.js
+const { FIT } = require('./fit-file-parser');
 
-const FitParserModule = require('fit-file-parser/dist/fit-parser.js');
-const FitParser = FitParserModule.default || FitParserModule;
+// your parsing / UI glue
+function parseFitFile(arrayBuffer) {
+  // use FIT + your own logic here
+}
 
-// Put it on the global so index.html can just use `new FitParser(...)`
-window.FitParser = FitParser;
+// expose to browser
+window.YousuliFit = {
+  FIT,
+  parseFitFile,
+};
