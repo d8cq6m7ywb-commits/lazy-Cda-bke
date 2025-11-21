@@ -466,6 +466,11 @@ document.addEventListener("DOMContentLoaded", function(){
   if (fitInput) {
     fitInput.addEventListener("change", handleFitFileSelect);
   }
+
+  const modeSel = document.getElementById("analysisMode");
+  if (modeSel) {
+    modeSel.addEventListener("change", updateLapCheckboxState);
+  }
 });
 
 function resetValues(){
@@ -882,6 +887,17 @@ function normaliseFitDataFromFitParser(data){
   return { laps, records };
 }
 
+// NEW: enable/disable lap checkboxes depending on mode
+function updateLapCheckboxState(){
+  const modeEl = document.getElementById("analysisMode");
+  if (!modeEl) return;
+  const mode = modeEl.value;
+  const checkboxes = document.querySelectorAll(".lap-use");
+  checkboxes.forEach(cb => {
+    cb.disabled = (mode === "race");
+  });
+}
+
 function renderLapTable(laps){
   const body = document.getElementById("lapTableBody");
   if (!body) return;
@@ -894,6 +910,7 @@ function renderLapTable(laps){
     td.style.textAlign = "center";
     tr.appendChild(td);
     body.appendChild(tr);
+    updateLapCheckboxState();
     return;
   }
 
@@ -922,6 +939,8 @@ function renderLapTable(laps){
     `;
     body.appendChild(tr);
   });
+
+  updateLapCheckboxState();
 }
 
 function runFitAnalysis(){
