@@ -1,3 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CdA Based On Power + FIT Analyzer (beta)</title>
+<link href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  font-family:"Lato",sans-serif;font-size:16px;background:#f4f4f4;color:#333;
+  display:flex;justify-content:center;align-items:flex-start;min-height:100vh;padding:20px
+}
+.wrapper__calc{background:#fff;border-radius:10px;box-shadow:0 4px 8px rgba(0,0,0,.1);padding:30px;max-width:1100px;width:100%}
+.header__calc{text-align:center;margin-bottom:20px}
+.heading__primary--calc{font-size:28px;text-transform:uppercase;color:#083258}
+
+/* Layout fixes */
+.grid__container{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(280px,1fr));
+  grid-gap:20px;
+  justify-items:stretch;
+  margin-bottom:20px
+}
+.input__box--calc{
+  width:100%;max-width:100%;
+  background:#f8f7f1;border-radius:5px;padding:15px
+}
+
+/* Label row */
+.label__row{
+  display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px
+}
+.label__calc{font-size:16px;color:#555;font-weight:500}
+.label__meta{font-size:13px;color:#777;white-space:nowrap}
+
+.combined__calc{position:relative;margin-bottom:5px}
+.input__calc{width:100%;padding:10px;border:1px solid #ddd;border-radius:5px;font-size:16px;color:#333}
+.input__calc:focus{outline:0;border-color:#083258}
+
+/* Time inputs */
+.combined__calc--time{display:flex;align-items:center}
+.unit__calc--colon{margin:0 6px;font-size:18px;font-weight:bold}
+
+/* Helper / warning / footnotes */
+.helper,.warning,.footnote{
+  margin-top:10px;line-height:1.4;font-size:.9em;color:#666;
+  overflow-wrap:anywhere;word-break:break-word;white-space:normal
+}
+.warning{
+  padding:10px;border-left:4px solid #c0392b;background:#fdecea;color:#7f1d1d;border-radius:4px
+}
+
+.button-row{display:flex;justify-content:center;gap:10px;margin-top:20px;flex-wrap:wrap}
+.btn-blue{background:#007bff;color:#fff;font-size:16px;border:none;border-radius:5px;padding:10px 20px;cursor:pointer;transition:background-color .2s ease}
+.btn-blue:hover{background:#0056b3}
+
+.output__container--calc{text-align:center;background:#fbfbfb;border-radius:5px;padding:20px;margin-top:20px}
+.heading__tertiary--calc{font-size:20px;text-transform:uppercase;color:#083258;margin-bottom:15px}
+.row__res--calc{margin-bottom:10px}
+.res__label{font-size:16px;font-weight:500;color:#555;margin-right:5px}
+.res__value{font-size:20px;font-weight:700;color:#333}
+
+input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+input[type=number]{-moz-appearance:textfield}
+
+hr.section-split{
+  margin:30px 0;border:0;border-top:1px solid #ddd
+}
+
+/* FIT analyzer layout */
+.fit-section-title{
+  font-size:22px;
+  text-transform:uppercase;
+  color:#083258;
+  margin-bottom:10px;
+  text-align:left;
+}
+
+.fit-layout{
+  display:grid;
+  grid-template-columns:minmax(260px,340px) minmax(260px,1fr);
+  grid-gap:20px;
+  align-items:flex-start;
+}
+
+.fit-card{
+  background:#f8f7f1;border-radius:5px;padding:15px;
+}
+
+.fit-status{
+  font-size:0.9em;color:#555;margin-top:8px;min-height:1.2em;
+}
+
+#lapTable{
+  width:100%;
+  border-collapse:collapse;
+  font-size:0.9em;
+}
+#lapTable th,#lapTable td{
+  border-bottom:1px solid #ddd;
+  padding:4px 6px;
+  text-align:right;
+}
+#lapTable th{
+  background:#eee;
+  text-align:right;
+}
+#lapTable th:first-child,#lapTable td:first-child{text-align:left}
+
+.fit-summary{
+  text-align:left;
+  margin-bottom:10px;
+  font-size:0.95em;
+}
+.fit-stats-table{
+  width:100%;
+  border-collapse:collapse;
+  font-size:0.9em;
+}
+.fit-stats-table th,.fit-stats-table td{
+  border-bottom:1px solid #ddd;
+  padding:4px 6px;
+}
+.fit-stats-table th{
+  background:#eee;
+}
+
+/* Small screens */
+@media screen and (max-width:900px){
+  .grid__container{grid-template-columns:1fr}
+  .fit-layout{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="wrapper__calc">
+<header class="header__calc">
+  <h1 class="heading__primary--calc">CdA Based On Power</h1>
+</header>
+
+<!-- ORIGINAL SINGLE-POINT CALCULATOR -->
+<div class="grid__container">
+  <div class="input__box--calc">
+    <div class="label__row">
+      <label class="label__calc">Unit</label>
+    </div>
+    <div class="combined__calc">
+      <select id="unit" class="input__calc" onchange="switchUnit()">
+        <option value="metric" selected>Metric</option>
+        <option value="imperial">Imperial</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="input__box--calc">
+    <div class="label__row">
+      <label class="label__calc">Power meter location</label>
+    </div>
+    <div class="combined__calc">
+      <select id="pmLocation" class="input__calc">
+        <option value="crank" selected>Crank / pedals (apply drivetrain %)</option>
+        <option value="hub">Rear hub / smart-trainer (already at wheel)</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="input__box--calc">
+    <div class="label__row"><label class="label__calc">Altitude (m)</label></div>
+    <div class="combined__calc"><input id="altitude" class="input__calc" type="number" value="100"></div>
+  </div>
+
+  <div class="input__box--calc">
+    <div class="label__row"><label class="label__calc">Temperature (°C)</label></div>
+    <div class="combined__calc"><input id="tempC" class="input__calc" type="number" value="20"></div>
+  </div>
+
+  <div class="input__box--calc">
+    <div class="label__row">
+      <label class="label__calc">Relative Humidity (%)</label>
+      <span class="label__meta">optional</span>
+    </div>
+    <div class="combined__calc">
+      <input id="rhPct" class="input__calc" type="number" min="0" max="100" placeholder="e.g., 50">
+    </div>
+  </div>
+
+  <div class="input__box--calc">
+    <div class="label__row">
+      <label class="label__calc">Air Pressure Override (hPa)</label>
+      <span class="label__meta">station pressure • optional</span>
+    </div>
+    <div class="combined__calc">
+      <input id="pOverride" class="input__calc" type="number" placeholder="Leave blank to auto-calc from altitude">
+    </div>
+  </div>
+
+  <div class="input__box--calc">
+    <div class="label__row"><label class="label__calc">Rider Weight</label></div>
+    <div class="combined__calc"><input id="rider-weight-kg" class="input__calc" type="number" value="70"></div>
+  </div>
+
+  <div class="input__box--calc">
+    <div class="label__row"><label class="label__calc">Clothes & Gear (kg)</label></div>
+    <div class="combined__calc"><input id="clothes-gear-kg" class="input__calc" type="number" value="1"></div>
+  </div>
+
+  <div class="input__box--calc">
+    <div class="label__row"><label class="label__calc">Bike Weight (kg)</label></div>
+    <div class="combined__calc"><input id="bike-weight-kg" class="input__calc" type="number" value="9"></div>
+  </div>
+
+  <div class="input__box--calc">
+    <div class="label__row"><label class="label__calc">Distance</label></div>
+    <div class="combined__calc"><input id="distance-km" class="input__calc" type="number" value="30"></div>
+  </div>
+
+  <div class="input__box--calc">
+    <div class="label__row"><label class="label__calc">Total Climb (m)</label></div>
+    <div class="combined__calc"><input id="total-climb-m" class="input__calc" type="number" value="0"></div>
+  </div>
+
+  <div class="input__box--calc">
+    <div class="label__row"><label class="label__calc">Wind (+ head / – tail)</label></div>
+    <div class="combined__calc">
+      <input id="wind-kmh" class="input__calc" type="number" value="0" placeholder="km/h (metric) or mph (imperial)">
+    </div>
+    <div class="helper">Use positive numbers for headwind and negative for tailwind. Drag is based on relative airspeed (ground speed ± wind).</div>
+  </div>
+
+  <div class="input__box--calc">
+    <div class="label__row"><label class="label__calc">Power (Watts)</label></div>
+    <div class="combined__calc"><input id="power" class="input__calc" type="number" value="180"></div>
+  </div>
+
+  <div class="input__box--calc">
+    <div class="label__row"><label class="label__calc">Crr (Rolling Resistance)</label></div>
+    <div class="combined__calc"><input id="crr_rolling" class="input__calc" type="number" step="0.0001" value="0.0036"></div>
+  </div>
+
+  <div class="input__box--calc">
+    <div class="label__row"><label class="label__calc">Drive Train Efficiency (%)</label></div>
+    <div class="combined__calc"><input id="driveTrainEfficiency" class="input__calc" type="number" value="98"></div>
+  </div>
+
+  <div class="input__box--calc">
+    <div class="label__row"><label class="label__calc">Time (hh:mm:ss)</label></div>
+    <div class="combined__calc--time">
+      <input id="hh" class="input__calc" type="number" value="1" style="max-width:70px">
+      <span class="unit__calc--colon">:</span>
+      <input id="mm" class="input__calc" type="number" value="0" style="max-width:70px">
+      <span class="unit__calc--colon">:</span>
+      <input id="ss" class="input__calc" type="number" value="0" style="max-width:70px">
+    </div>
+  </div>
+</div>
+
+<div class="button-row">
+  <button class="btn-blue" onclick="calculateResult()">Calculate (single point)</button>
+  <button class="btn-blue" onclick="resetValues()">Reset</button>
+</div>
+
+<div id="warn" class="warning" style="display:none;"></div>
+
+<div class="output__container--calc">
+  <h3 class="heading__tertiary--calc">Output</h3>
+  <div class="row__res--calc"><span class="res__label">Speed:</span><span class="res__value" id="speed">0.00 km/h</span></div>
+  <div class="row__res--calc"><span class="res__label">CdA:</span><span class="res__value" id="cda">0.000</span></div>
+  <div class="row__res--calc"><span class="res__label">Slope Grade:</span><span class="res__value" id="slopeGrade">0.0000 %</span></div>
+  <div class="row__res--calc"><span class="res__label">Air Density used:</span><span class="res__value" id="rhoUsed">-</span></div>
+  <div class="row__res--calc"><span class="res__label">Pressure used:</span><span class="res__value" id="pressureUsed">-</span></div>
+  <div class="footnote">
+    Assumes <em>dry air</em> unless Relative Humidity is entered. “Air Pressure Override” expects <strong>station pressure</strong> at your location (not sea-level reduced).
+  </div>
+</div>
+
+<!-- FIT FILE ANALYZER SECTION -->
+<hr class="section-split">
+
+<h2 class="fit-section-title">FIT File CdA Analyzer (beta)</h2>
+<div class="fit-layout">
+  <!-- Left column: controls -->
+  <div class="fit-card">
+    <div class="label__row">
+      <label class="label__calc">Upload .fit file</label>
+      <span class="label__meta">analyze race / test rides</span>
+    </div>
+    <input type="file" id="fitFileInput" class="input__calc" accept=".fit" />
+
+    <div class="label__row" style="margin-top:12px;">
+      <label class="label__calc">Analysis mode</label>
+    </div>
+    <select id="analysisMode" class="input__calc">
+      <option value="race" selected>Race / whole file (use all usable laps)</option>
+      <option value="laps">Lap-based test (only selected laps)</option>
+    </select>
+
+    <div class="helper" style="margin-top:12px;">
+      Uses the same environment inputs as above (altitude, temp, RH, Crr, drivetrain, wind, weights).
+      For now this assumes wind is roughly constant over the test.
+    </div>
+
+    <div class="label__row" style="margin-top:12px;">
+      <label class="label__calc">Sample filters (hard-coded for now)</label>
+    </div>
+    <div class="helper">
+      • Ignores samples with speed &lt; 10 km/h or &gt; 65 km/h<br>
+      • Ignores power &lt; 80 W or &gt; 900 W<br>
+      • Ignores |grade| &gt; 6%<br>
+      • Discards CdA &lt; 0.10 or &gt; 0.50 as outliers
+    </div>
+
+    <div class="button-row" style="justify-content:flex-start;margin-top:16px;">
+      <button class="btn-blue" type="button" onclick="runFitAnalysis()">Run CdA analysis</button>
+    </div>
+
+    <div id="fitStatus" class="fit-status"></div>
+  </div>
+
+  <!-- Right column: laps + results -->
+  <div class="fit-card">
+    <h3 style="margin-bottom:8px;font-size:18px;color:#083258;">Laps in file</h3>
+    <div class="helper">
+      Tick the laps you want to include in the analysis (e.g. exclude warm-up, U-turn faff, etc.).
+    </div>
+    <div style="max-height:220px;overflow:auto;margin-top:8px;">
+      <table id="lapTable">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Use?</th>
+            <th>Dist (km)</th>
+            <th>Time (min)</th>
+            <th>Avg speed</th>
+            <th>Avg power</th>
+          </tr>
+        </thead>
+        <tbody id="lapTableBody">
+          <!-- filled dynamically -->
+        </tbody>
+      </table>
+    </div>
+
+    <div id="fitResults" style="margin-top:16px;">
+      <div class="fit-summary" id="fitSummary"></div>
+      <table class="fit-stats-table" id="fitStatsTable" style="display:none;">
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th>Samples</th>
+            <th>Median CdA</th>
+            <th>P25–P75</th>
+            <th>Speed note</th>
+          </tr>
+        </thead>
+        <tbody id="fitStatsBody"></tbody>
+      </table>
+      <div style="margin-top:12px;">
+        <canvas id="fitScatter" height="180"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div> <!-- wrapper -->
+
+<!-- External libs -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<!-- Bundle produced from fit-entry.js (fit-file-parser via browserify) -->
+<script src="bundle.js"></script>
+
+<script>
+// ---------- SINGLE-POINT CDA CALCULATOR ----------
+function switchUnit(){ calculateResult(); }
+function showWarning(msg){ const w=document.getElementById("warn"); w.textContent=msg; w.style.display="block"; }
+function clearWarning(){ const w=document.getElementById("warn"); w.style.display="none"; w.textContent=""; }
+
+function calculateResult(){
+  clearWarning();
+  const unit=document.getElementById("unit").value;
+  const pmLocation=document.getElementById("pmLocation").value;
+
+  let altitude=+document.getElementById("altitude").value||0;
+  let tempC=+document.getElementById("tempC").value||0;
+  let rhField=document.getElementById("rhPct").value;
+  let rhPct = rhField === "" ? null : Math.min(Math.max(+rhField,0),100);
+  let pressureOverride=+document.getElementById("pOverride").value;
+
+  let riderWeight=+document.getElementById("rider-weight-kg").value||0;
+  let clothesGear=+document.getElementById("clothes-gear-kg").value||0;
+  let bikeWeight=+document.getElementById("bike-weight-kg").value||0;
+
+  let distance=+document.getElementById("distance-km").value||1;
+  let climb=+document.getElementById("total-climb-m").value||0;
+  let wind=+document.getElementById("wind-kmh").value||0; // headwind +, tailwind -
+
+  if(unit==="imperial"){
+    riderWeight/=2.20462; clothesGear/=2.20462; bikeWeight/=2.20462;
+    distance*=1.60934; climb/=3.28084; wind*=1.60934;
+  }
+
+  let timeH=(+document.getElementById("hh").value||0)+(+document.getElementById("mm").value||0)/60+(+document.getElementById("ss").value||0)/3600;
+  timeH=Math.max(timeH,0.0001);
+
+  let power=+document.getElementById("power").value||0;
+  let crr=+document.getElementById("crr_rolling").value||0.0036;
+  let drivetrainEff=(+document.getElementById("driveTrainEfficiency").value||98)/100;
+
+  // Speeds
+  let speedKmH=distance/timeH;
+  let v_g=speedKmH*(1000/3600);     // ground speed (m/s)
+  let v_wind=(wind)/3.6;            // signed wind in m/s
+  let v_as=Math.max(0, v_g + v_wind); // non-negative airspeed
+
+  // Mass & grade
+  let totalMass=riderWeight+clothesGear+bikeWeight;
+  let g=9.80665;
+  let slopeFraction= climb/(distance*1000);
+  let cosTheta= 1/Math.sqrt(1 + slopeFraction*slopeFraction);
+
+  // Standard atmosphere (troposphere) unless overridden
+  const P0=101325, T0=288.15, L=0.0065, M=0.0289652, R=8.314462618;
+  const Tkelvin=tempC+273.15;
+  const pressurePa=(pressureOverride>0) ? pressureOverride*100 : P0*Math.pow(1-(L*altitude)/T0,(g*M)/(R*L));
+
+  // Air density: dry default; adjust for humidity if provided
+  let rho=(M*pressurePa)/(R*Tkelvin); // dry
+  if(rhPct!==null){
+    const es_hPa=6.1094*Math.exp(17.625*tempC/(tempC+243.04)); // Magnus–Tetens
+    const es=es_hPa*100;
+    const e=Math.min(es, Math.max(0,(rhPct/100)*es));
+    const pd=Math.max(0, pressurePa - e);
+    const Rd=287.058, Rv=461.495;
+    rho=(pd/(Rd*Tkelvin)) + (e/(Rv*Tkelvin));
+  }
+
+  // Resistive powers
+  const powerRolling= g*totalMass*crr*cosTheta*v_g;
+  const powerClimb  = g*totalMass*slopeFraction*v_g;
+
+  // Power at wheel (depends on PM location)
+  const powerAtWheel=(pmLocation==="crank") ? power*drivetrainEff : power;
+
+  const powerAero = powerAtWheel - powerRolling - powerClimb;
+  const denom = 0.5*rho*v_as*v_as*v_g;
+
+  if(denom<=0 || powerAero<=0){
+    document.getElementById("cda").textContent="—";
+    showWarning("Infeasible inputs: aero power ≤ 0 (or zero airspeed). Check wind sign, climb, Crr, power, and time/distance.");
+  } else {
+    const cda = powerAero/denom;
+    document.getElementById("cda").textContent=cda.toFixed(3);
+  }
+
+  // Outputs
+  document.getElementById("speed").textContent = `${speedKmH.toFixed(2)} ${unit==='imperial' ? 'mph' : 'km/h'}`;
+  document.getElementById("slopeGrade").textContent = (slopeFraction*100).toFixed(4)+" %";
+  document.getElementById("rhoUsed").textContent = `${rho.toFixed(4)} kg/m³`;
+  document.getElementById("pressureUsed").textContent = `${(pressurePa/100).toFixed(1)} hPa`;
+}
+
+document.addEventListener("DOMContentLoaded", function(){
+  resetValues();
+
+  const fitInput = document.getElementById("fitFileInput");
+  if (fitInput) {
+    fitInput.addEventListener("change", handleFitFileSelect);
+  }
+});
+
+function resetValues(){
+  document.getElementById("unit").value="metric";
+  document.getElementById("pmLocation").value="crank";
+  document.getElementById("altitude").value=100;
+  document.getElementById("tempC").value=20;
+  document.getElementById("rhPct").value="";
+  document.getElementById("pOverride").value="";
+
+  document.getElementById("rider-weight-kg").value=70;
+  document.getElementById("clothes-gear-kg").value=1;
+  document.getElementById("bike-weight-kg").value=9;
+
+  document.getElementById("distance-km").value=30;
+  document.getElementById("total-climb-m").value=0;
+  document.getElementById("wind-kmh").value=0;
+
+  document.getElementById("power").value=180;
+  document.getElementById("crr_rolling").value=0.0036;
+  document.getElementById("driveTrainEfficiency").value=98;
+
+  document.getElementById("hh").value=1;
+  document.getElementById("mm").value=0;
+  document.getElementById("ss").value=0;
+
+  clearWarning();
+  calculateResult();
+}
+
+// ---------- SHARED ENVIRONMENT FOR FIT ANALYZER ----------
+function getEnvParamsForSamples(){
+  const unit=document.getElementById("unit").value;
+  const pmLocation=document.getElementById("pmLocation").value;
+
+  let altitude=+document.getElementById("altitude").value||0;
+  let tempC=+document.getElementById("tempC").value||0;
+  let rhField=document.getElementById("rhPct").value;
+  let rhPct = rhField === "" ? null : Math.min(Math.max(+rhField,0),100);
+  let pressureOverride=+document.getElementById("pOverride").value;
+
+  let riderWeight=+document.getElementById("rider-weight-kg").value||0;
+  let clothesGear=+document.getElementById("clothes-gear-kg").value||0;
+  let bikeWeight=+document.getElementById("bike-weight-kg").value||0;
+
+  let wind=+document.getElementById("wind-kmh").value||0;
+  let crr=+document.getElementById("crr_rolling").value||0.0036;
+  let drivetrainEff=(+document.getElementById("driveTrainEfficiency").value||98)/100;
+
+  if(unit==="imperial"){
+    riderWeight/=2.20462; clothesGear/=2.20462; bikeWeight/=2.20462;
+    wind*=1.60934;
+  }
+
+  const totalMass=riderWeight+clothesGear+bikeWeight;
+  const g=9.80665;
+
+  const P0=101325, T0=288.15, L=0.0065, M=0.0289652, R=8.314462618;
+  const Tkelvin=tempC+273.15;
+  const pressurePa=(pressureOverride>0) ? pressureOverride*100 : P0*Math.pow(1-(L*altitude)/T0,(g*M)/(R*L));
+
+  let rho=(M*pressurePa)/(R*Tkelvin); // dry
+  if(rhPct!==null){
+    const es_hPa=6.1094*Math.exp(17.625*tempC/(tempC+243.04));
+    const es=es_hPa*100;
+    const e=Math.min(es, Math.max(0,(rhPct/100)*es));
+    const pd=Math.max(0, pressurePa - e);
+    const Rd=287.058, Rv=461.495;
+    rho=(pd/(Rd*Tkelvin)) + (e/(Rv*Tkelvin));
+  }
+
+  const windMs = wind/3.6;
+
+  return {
+    rho,
+    totalMass,
+    crr,
+    g,
+    windMs,
+    powerAtWheelFactor: (pmLocation==="crank") ? drivetrainEff : 1
+  };
+}
+
+// ---------- FIT FILE CDA ANALYZER ----------
+let currentFitData = null;
+let fitScatterChart = null;
+
+function resolveFitParserCtor(){
+  const w = window;
+  const fromDirect = w.FitParser;
+  const fromFitObj = w.FIT && w.FIT.FitParser;
+
+  const ctor = (typeof fromDirect === "function") ? fromDirect :
+               (typeof fromFitObj === "function") ? fromFitObj :
+               null;
+
+  if (!ctor){
+    console.error("FitParser global not found on window:", {
+      FitParser: w.FitParser,
+      FIT: w.FIT
+    });
+  }
+  return ctor;
+}
+
+function handleFitFileSelect(evt){
+  const file = evt.target.files && evt.target.files[0];
+  const statusEl = document.getElementById("fitStatus");
+  const lapBody = document.getElementById("lapTableBody");
+  const summaryEl = document.getElementById("fitSummary");
+  const statsTable = document.getElementById("fitStatsTable");
+  const statsBody = document.getElementById("fitStatsBody");
+
+  if (lapBody) lapBody.innerHTML = "";
+  if (summaryEl) summaryEl.textContent = "";
+  if (statsBody) statsBody.innerHTML = "";
+  if (statsTable) statsTable.style.display = "none";
+
+  if (!file) {
+    statusEl.textContent = "";
+    currentFitData = null;
+    return;
+  }
+
+  const FitParserCtor = resolveFitParserCtor();
+  if (!FitParserCtor) {
+    statusEl.textContent = "FIT parser not found (bundle.js).";
+    currentFitData = null;
+    return;
+  }
+
+  statusEl.textContent = `Reading ${file.name}…`;
+
+  const reader = new FileReader();
+  reader.onload = function(e){
+    const buffer = e.target.result;
+    try{
+      const fitParser = new FitParserCtor({
+        force: true,
+        speedUnit: "m/s",
+        lengthUnit: "m",
+        temperatureUnit: "celsius",
+        mode: "cascade",
+        elapsedRecordField: true
+      });
+
+      fitParser.parse(buffer, function(error, data){
+        if (error){
+          console.error(error);
+          statusEl.textContent = "Error parsing FIT file.";
+          currentFitData = null;
+          return;
+        }
+        currentFitData = normaliseFitDataFromFitParser(data);
+        statusEl.textContent = `Parsed ${currentFitData.records.length} records, ${currentFitData.laps.length} laps.`;
+        renderLapTable(currentFitData.laps);
+      });
+    } catch(err){
+      console.error(err);
+      statusEl.textContent = "Exception while parsing FIT file.";
+      currentFitData = null;
+    }
+  };
+  reader.onerror = function(){
+    statusEl.textContent = "Error reading file.";
     currentFitData = null;
   };
   reader.readAsArrayBuffer(file);
