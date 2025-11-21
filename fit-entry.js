@@ -1,13 +1,6 @@
 // fit-entry.js
-const { FIT } = require('./fit-file-parser');
+const FitParserModule = require("fit-file-parser");
+const FitParser = FitParserModule.default || FitParserModule;
 
-// your parsing / UI glue
-function parseFitFile(arrayBuffer) {
-  // use FIT + your own logic here
-}
-
-// expose to browser
-window.YousuliFit = {
-  FIT,
-  parseFitFile,
-};
+// expose constructor globally for the browser code in index.html
+window.FitParser = FitParser;
