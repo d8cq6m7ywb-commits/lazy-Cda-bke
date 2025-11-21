@@ -557,10 +557,18 @@ let currentFitData = null;
 let fitScatterChart = null;
   
 function resolveFitParserCtor(){
-  // Try window.FitParser first (what fit-entry.js sets)
-  if (window.FitParser) return window.FitParser;
-  // Fallback: UMD-style global from --standalone FitParser
-  if (typeof FitParser !== "undefined") return FitParser;
+  const mod = window.FitParser;
+  if (!mod) return null;
+
+  // If the global itself is a constructor
+  if (typeof mod === "function") return mod;
+
+  // If browserify/UMD wrapped it as a default export
+  if (typeof mod.default === "function") return mod.default;
+
+  // If it was nested as a property
+  if (typeof mod.FitParser === "function") return mod.FitParser;
+
   return null;
 }
 function handleFitFileSelect(evt){
