@@ -673,47 +673,40 @@ function addGradeFromAlt(records){
 }
 
 /**
- * Build:
- *  - one global records array (all samples)
- *  - laps based on Garmin lap metadata (start_time + duration)
- * If no lap metadata present, fall back to one synthetic lap = whole file.
+ * Collects all records (like the original working version) and,
+ * if lap metadata exists, builds per-lap slices based on Garmin lap presses.
+ * Always returns at least one "whole-file" lap as fallback.
  */
 function normaliseFitDataFromFitParser(data){
-  // 1) Collect all possible records from common locations
-  let rawRecords = [];
+  // 1) Collect ALL records recursively (same behaviour as before)
+  const rawRecords = [];
 
-  if (Array.isArray(data.records)) rawRecords = rawRecords.concat(data.records);
-  if (Array.isArray(data.record))  rawRecords = rawRecords.concat(data.record);
+  (function collectAllRecords(node){
+    if (!node || typeof node !== "object") return;
 
-  if (Array.isArray(data.sessions)) {
-    data.sessions.forEach(s => {
-      if (Array.isArray(s.records)) rawRecords = rawRecords.concat(s.records);
-    });
-  }
-  if (data.session && Array.isArray(data.session.records)) {
-    rawRecords = rawRecords.concat(data.session.records);
-  }
-
-  if (data.activity) {
-    if (Array.isArray(data.activity.records)) {
-      rawRecords = rawRecords.concat(data.activity.records);
+    if (Array.isArray(node)){
+      for (const item of node) collectAllRecords(item);
+      return;
     }
-    if (Array.isArray(data.activity.sessions)) {
-      data.activity.sessions.forEach(s => {
-        if (Array.isArray(s.records)) rawRecords = rawRecords.concat(s.records);
-      });
+
+    for (const key in node){
+      if (!Object.prototype.hasOwnProperty.call(node, key)) continue;
+      const val = node[key];
+
+      if ((key === "records" || key === "record") && Array.isArray(val)){
+        rawRecords.push(...val);
+      } else if (val && typeof val === "object"){
+        collectAllRecords(val);
+      }
     }
-  }
+  })(data);
 
-  const records = rawRecords
-    .map(normaliseRecord)
-    .filter(r => r.t || r.speed != null || r.distance != null);
-
+  const records = rawRecords.map(normaliseRecord);
   if (!records.length){
     return { laps: [], records: [] };
   }
 
-  // sort by timestamp if present
+  // Sort by timestamp for consistent lap slicing
   records.sort((a,b)=>{
     if (a.t && b.t) return a.t - b.t;
     if (a.t) return -1;
@@ -721,138 +714,163 @@ function normaliseFitDataFromFitParser(data){
     return 0;
   });
 
-  // 2) Collect lap metadata from as many shapes as possible
-  let lapMeta = [];
+  addGradeFromAlt(records);
 
-  if (Array.isArray(data.laps)) lapMeta = lapMeta.concat(data.laps);
+  // 2) Collect lap-like objects (Garmin lap presses)
+  const rawLaps = [];
+  const seenLapNodes = new Set();
 
-  if (Array.isArray(data.sessions)) {
-    data.sessions.forEach(s => {
-      if (Array.isArray(s.laps)) lapMeta = lapMeta.concat(s.laps);
-    });
-  }
+  (function collectAllLaps(node){
+    if (!node || typeof node !== "object") return;
 
-  if (data.session && Array.isArray(data.session.laps)) {
-    lapMeta = lapMeta.concat(data.session.laps);
-  }
-
-  if (data.activity) {
-    if (Array.isArray(data.activity.laps)) {
-      lapMeta = lapMeta.concat(data.activity.laps);
+    if (Array.isArray(node)){
+      for (const item of node) collectAllLaps(item);
+      return;
     }
-    if (Array.isArray(data.activity.sessions)) {
-      data.activity.sessions.forEach(s => {
-        if (Array.isArray(s.laps)) lapMeta = lapMeta.concat(s.laps);
-      });
-    }
-  }
 
-  const metaNorm = lapMeta.map(lap => {
-    const startRaw = lap.start_time || lap.startTime || lap.start || lap.timestamp;
-    const tStart = startRaw ? new Date(startRaw) : null;
-    const totalDist = toNumber(lap.total_distance) ?? toNumber(lap.total_distance_m);
-    const totalTimer = toNumber(lap.total_timer_time) ?? toNumber(lap.total_elapsed_time);
-    const avgSpeed = toNumber(lap.avg_speed);
-    const avgPower = toNumber(lap.avg_power);
-    return { raw: lap, tStart, totalDist, totalTimer, avgSpeed, avgPower };
-  }).filter(m => m.tStart);
+    const hasStart =
+      ("start_time" in node) ||
+      ("startTime" in node)  ||
+      ("start" in node)      ||
+      ("timestamp" in node);
+
+    const hasDurOrDist =
+      ("total_timer_time" in node)   ||
+      ("total_elapsed_time" in node) ||
+      ("total_distance" in node)     ||
+      ("total_distance_m" in node);
+
+    if (hasStart && hasDurOrDist){
+      if (!seenLapNodes.has(node)){
+        seenLapNodes.add(node);
+        rawLaps.push(node);
+      }
+    }
+
+    for (const key in node){
+      if (!Object.prototype.hasOwnProperty.call(node, key)) continue;
+      const val = node[key];
+      if (val && typeof val === "object"){
+        collectAllLaps(val);
+      }
+    }
+  })(data);
 
   let laps = [];
 
-  if (metaNorm.length){
-    // sort laps by start time
-    metaNorm.sort((a,b)=>a.tStart - b.tStart);
+  if (rawLaps.length){
+    // Normalise lap metadata
+    const metaNorm = rawLaps.map(lap => {
+      const startRaw = lap.start_time || lap.startTime || lap.start || lap.timestamp;
+      const tStart   = startRaw ? new Date(startRaw) : null;
+      const totalDist  = toNumber(lap.total_distance)   ?? toNumber(lap.total_distance_m);
+      const totalTimer = toNumber(lap.total_timer_time) ?? toNumber(lap.total_elapsed_time);
+      const avgSpeed   = toNumber(lap.avg_speed);
+      const avgPower   = toNumber(lap.avg_power);
 
-    // infer end times
-    for (let i=0;i<metaNorm.length;i++){
-      const m = metaNorm[i];
-      let tEnd = null;
+      return { raw: lap, tStart, totalDist, totalTimer, avgSpeed, avgPower };
+    }).filter(m => m.tStart);
 
-      if (m.totalTimer && m.totalTimer > 0){
-        tEnd = new Date(m.tStart.getTime() + m.totalTimer*1000);
-      }
+    if (metaNorm.length){
+      // Sort laps by start time
+      metaNorm.sort((a,b)=> a.tStart - b.tStart);
 
-      const next = metaNorm[i+1];
-      if (next && next.tStart){
-        if (!tEnd || next.tStart < tEnd){
-          tEnd = next.tStart;
+      // Infer end times
+      for (let i = 0; i < metaNorm.length; i++){
+        const m = metaNorm[i];
+        let tEnd = null;
+
+        if (m.totalTimer && m.totalTimer > 0){
+          tEnd = new Date(m.tStart.getTime() + m.totalTimer * 1000);
         }
-      }
-      m.tEnd = tEnd;
-    }
 
-    const lastRecTime = records[records.length-1].t;
-    if (metaNorm.length && !metaNorm[metaNorm.length-1].tEnd && lastRecTime){
-      metaNorm[metaNorm.length-1].tEnd = lastRecTime;
-    }
-
-    // Assign records to each lap using a moving index
-    let rIdx = 0;
-    for (let i=0;i<metaNorm.length;i++){
-      const m = metaNorm[i];
-      const lapRecs = [];
-
-      // skip records before lap start
-      while (rIdx < records.length && records[rIdx].t && records[rIdx].t < m.tStart){
-        rIdx++;
-      }
-      // take records inside [tStart, tEnd)
-      while (rIdx < records.length && records[rIdx].t &&
-             (!m.tEnd || records[rIdx].t < m.tEnd)){
-        lapRecs.push(records[rIdx]);
-        rIdx++;
-      }
-
-      if (!lapRecs.length) continue;
-
-      addGradeFromAlt(lapRecs);
-
-      let dist = m.totalDist;
-      if (dist == null &&
-          lapRecs[0].distance != null &&
-          lapRecs[lapRecs.length-1].distance != null){
-        const d0 = lapRecs[0].distance;
-        const d1 = lapRecs[lapRecs.length-1].distance;
-        dist = d1 >= d0 ? (d1 - d0) : d1;
-      }
-
-      let tSeconds = m.totalTimer;
-      if (tSeconds == null && lapRecs[0].t && lapRecs[lapRecs.length-1].t){
-        tSeconds = (lapRecs[lapRecs.length-1].t - lapRecs[0].t)/1000;
-      }
-
-      let avgP = m.avgPower;
-      if (avgP == null){
-        let sumP = 0, nP = 0;
-        lapRecs.forEach(r => {
-          if (r.power != null && isFinite(r.power)){
-            sumP += r.power;
-            nP++;
+        const next = metaNorm[i+1];
+        if (next && next.tStart){
+          if (!tEnd || next.tStart < tEnd){
+            tEnd = next.tStart;
           }
-        });
-        avgP = nP ? sumP / nP : null;
+        }
+        m.tEnd = tEnd;
       }
 
-      laps.push({
-        index: laps.length,
-        displayIndex: laps.length + 1,
-        use: true,
-        totalDistance: dist,
-        totalTimerTime: tSeconds,
-        avgSpeed: m.avgSpeed,
-        avgPower: avgP,
-        records: lapRecs
-      });
+      const lastRecTime = records[records.length - 1].t;
+      if (metaNorm.length && !metaNorm[metaNorm.length-1].tEnd && lastRecTime){
+        metaNorm[metaNorm.length-1].tEnd = lastRecTime;
+      }
+
+      // Slice the records array into per-lap chunks
+      let rIdx = 0;
+
+      for (let i = 0; i < metaNorm.length; i++){
+        const m = metaNorm[i];
+        const lapRecs = [];
+
+        // Skip records before lap start
+        while (rIdx < records.length && records[rIdx].t && records[rIdx].t < m.tStart){
+          rIdx++;
+        }
+
+        // Take records within [tStart, tEnd)
+        while (rIdx < records.length && records[rIdx].t &&
+               (!m.tEnd || records[rIdx].t < m.tEnd)){
+          lapRecs.push(records[rIdx]);
+          rIdx++;
+        }
+
+        if (!lapRecs.length) continue;
+
+        addGradeFromAlt(lapRecs);
+
+        // Distance
+        let dist = m.totalDist;
+        if (dist == null &&
+            lapRecs[0].distance != null &&
+            lapRecs[lapRecs.length-1].distance != null){
+          const d0 = lapRecs[0].distance;
+          const d1 = lapRecs[lapRecs.length-1].distance;
+          dist = d1 >= d0 ? (d1 - d0) : d1;
+        }
+
+        // Time
+        let tSeconds = m.totalTimer;
+        if (tSeconds == null && lapRecs[0].t && lapRecs[lapRecs.length-1].t){
+          tSeconds = (lapRecs[lapRecs.length-1].t - lapRecs[0].t) / 1000;
+        }
+
+        // Avg power
+        let avgP = m.avgPower;
+        if (avgP == null){
+          let sumP = 0, nP = 0;
+          for (const r of lapRecs){
+            if (r.power != null && isFinite(r.power)){
+              sumP += r.power;
+              nP++;
+            }
+          }
+          avgP = nP ? sumP / nP : null;
+        }
+
+        laps.push({
+          index: laps.length,
+          displayIndex: laps.length + 1,
+          use: true,
+          totalDistance: dist,
+          totalTimerTime: tSeconds,
+          avgSpeed: m.avgSpeed,
+          avgPower: avgP,
+          records: lapRecs
+        });
+      }
     }
   }
 
-  // Fallback: no lap metadata or we failed to build laps -> one big lap
+  // 3) Fallback: if no laps detected, build a single whole-file lap (old behaviour)
   if (!laps.length){
     const recs = records.slice();
     addGradeFromAlt(recs);
 
     const first = recs[0];
-    const last  = recs[recs.length-1];
+    const last  = recs[recs.length - 1];
 
     let totalDistance = null;
     if (last.distance != null){
@@ -865,16 +883,16 @@ function normaliseFitDataFromFitParser(data){
 
     let totalTimerTime = null;
     if (first.t && last.t){
-      totalTimerTime = (last.t - first.t)/1000;
+      totalTimerTime = (last.t - first.t) / 1000;
     }
 
     let sumP = 0, nP = 0;
-    recs.forEach(r => {
+    for (const r of recs){
       if (r.power != null && isFinite(r.power)){
         sumP += r.power;
         nP++;
       }
-    });
+    }
     const avgPower = nP ? sumP / nP : null;
 
     laps.push({
@@ -915,12 +933,10 @@ function renderLapTable(laps){
     const timeMin = lap.totalTimerTime != null ? (lap.totalTimerTime / 60) : null;
     const useDefault = !maxDist || (lap.totalDistance && lap.totalDistance > 0.3*maxDist);
 
-    // Compute average speed from dist/time where possible
     let lapSpeedKmh = null;
     if (distKm != null && timeMin != null && timeMin > 0.01) {
-      lapSpeedKmh = distKm / (timeMin / 60); // km/h
+      lapSpeedKmh = distKm / (timeMin / 60);
     } else if (lap.avgSpeed != null) {
-      // Assume avgSpeed is in m/s as per fit-file-parser options
       lapSpeedKmh = lap.avgSpeed * 3.6;
     }
 
