@@ -672,72 +672,83 @@ function addGradeFromAlt(records){
   records[0].grade = records[1].grade;
 }
 
+/**
+ * NEW: super-robust normaliser.
+ * - Collects all records from any common place in the parsed FIT data.
+ * - Builds ONE synthetic lap containing all those records.
+ */
 function normaliseFitDataFromFitParser(data){
-  // Try multiple shapes to be robust
-  let lapsRaw = [];
-  if (Array.isArray(data.laps)) {
-    lapsRaw = data.laps;
-  } else if (Array.isArray(data.sessions)) {
+  let rawRecords = [];
+
+  // Common locations
+  if (Array.isArray(data.records)) {
+    rawRecords = rawRecords.concat(data.records);
+  }
+  if (Array.isArray(data.record)) {
+    rawRecords = rawRecords.concat(data.record);
+  }
+
+  // Sometimes records are under sessions[]
+  if (Array.isArray(data.sessions)) {
     data.sessions.forEach(s => {
-      if (Array.isArray(s.laps)) lapsRaw.push(...s.laps);
+      if (Array.isArray(s.records)) {
+        rawRecords = rawRecords.concat(s.records);
+      }
     });
-  } else if (data.session && Array.isArray(data.session.laps)) {
-    lapsRaw = data.session.laps;
+  }
+
+  // Defensive: some shapes use activity.records
+  if (!rawRecords.length && data.activity && Array.isArray(data.activity.records)) {
+    rawRecords = rawRecords.concat(data.activity.records);
+  }
+
+  const records = rawRecords.map(normaliseRecord);
+  if (records.length) {
+    addGradeFromAlt(records);
   }
 
   const laps = [];
-  const allRecords = [];
 
-  lapsRaw.forEach((lap, idx) => {
-    const lapRecsRaw = Array.isArray(lap.records) ? lap.records : [];
-    const lapRecords = lapRecsRaw.map(normaliseRecord);
-    addGradeFromAlt(lapRecords);
+  if (records.length) {
+    const first = records[0];
+    const last  = records[records.length - 1];
 
-    const total_distance = toNumber(lap.total_distance) ?? toNumber(lap.total_distance_m);
-    const total_timer_time = toNumber(lap.total_timer_time);
-    const avg_speed = toNumber(lap.avg_speed);
-    const avg_power = toNumber(lap.avg_power);
+    let totalDistance = null;
+    if (last.distance != null) {
+      if (first.distance != null && last.distance >= first.distance) {
+        totalDistance = last.distance - first.distance;
+      } else {
+        totalDistance = last.distance;
+      }
+    }
+
+    let totalTimerTime = null;
+    if (first.t && last.t) {
+      totalTimerTime = (last.t - first.t) / 1000; // seconds
+    }
+
+    let sumP = 0, nP = 0;
+    for (const r of records) {
+      if (r.power != null && isFinite(r.power)) {
+        sumP += r.power;
+        nP++;
+      }
+    }
+    const avgPower = nP ? sumP / nP : null;
 
     laps.push({
-      index: idx,
-      displayIndex: idx + 1,
+      index: 0,
+      displayIndex: 1,
       use: true,
-      totalDistance: total_distance,
-      totalTimerTime: total_timer_time,
-      avgSpeed: avg_speed,
-      avgPower: avg_power,
-      records: lapRecords
+      totalDistance: totalDistance,
+      totalTimerTime: totalTimerTime,
+      avgSpeed: null,   // will be derived in renderLapTable if dist/time exist
+      avgPower: avgPower,
+      records: records
     });
-
-    allRecords.push(...lapRecords);
-  });
-
-  // Fallback if no laps but we do have top-level records
-  if (!laps.length) {
-    let recs = [];
-    if (Array.isArray(data.records)) {
-      recs = data.records;
-    } else if (Array.isArray(data.record)) {
-      recs = data.record;
-    }
-    if (recs.length) {
-      const rootRecs = recs.map(normaliseRecord);
-      addGradeFromAlt(rootRecs);
-      laps.push({
-        index: 0,
-        displayIndex: 1,
-        use: true,
-        totalDistance: rootRecs[rootRecs.length-1]?.distance ?? null,
-        totalTimerTime: null,
-        avgSpeed: null,
-        avgPower: null,
-        records: rootRecs
-      });
-      allRecords.push(...rootRecs);
-    }
   }
 
-  return { laps, records: allRecords };
+  return { laps, records };
 }
 
 function renderLapTable(laps){
