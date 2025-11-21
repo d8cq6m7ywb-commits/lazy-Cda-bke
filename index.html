@@ -366,7 +366,7 @@ hr.section-split{
 
 <!-- External libs -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<!-- Use the browser/UMD bundle from dist/fit.js, saved locally as fit-file-parser.js -->
+<!-- Our browserified FIT parser bundle -->
 <script src="bundle.js"></script>
 
 <script>
@@ -588,7 +588,7 @@ function handleFitFileSelect(evt){
 
   const FitParserCtor = resolveFitParserCtor();
   if (!FitParserCtor) {
-    statusEl.textContent = "FIT parser not found. Make sure fit-file-parser.js (dist/fit.js) is included.";
+    statusEl.textContent = "FIT parser not found (bundle.js not loaded?).";
     currentFitData = null;
     return;
   }
@@ -668,50 +668,96 @@ function addGradeFromAlt(records){
   records[0].grade = records[1].grade;
 }
 
+function extractSessions(data){
+  // Typical output: data.activity.sessions[...]
+  if (data && data.activity && Array.isArray(data.activity.sessions)){
+    return data.activity.sessions;
+  }
+  // Fallback: data.sessions as array
+  if (Array.isArray(data.sessions)) return data.sessions;
+  // Fallback: treat top-level as one session
+  return [data];
+}
+
+function buildLapFromRecords(lapRecords, index){
+  addGradeFromAlt(lapRecords);
+  const n = lapRecords.length;
+  const first = lapRecords[0];
+  const last  = lapRecords[n-1];
+
+  const totalDistance = (last && last.distance != null) ? last.distance : null;
+  let totalTimerTime = null;
+  if (first && last && first.t && last.t){
+    totalTimerTime = (last.t - first.t) / 1000; // seconds
+  }
+
+  let sumPower = 0, countPower = 0;
+  for (const r of lapRecords){
+    if (isFinite(r.power)){
+      sumPower += r.power;
+      countPower++;
+    }
+  }
+  const avgPower = countPower ? (sumPower / countPower) : null;
+  const avgSpeed = (totalDistance != null && totalTimerTime != null && totalTimerTime > 0)
+    ? (totalDistance / totalTimerTime) // m/s
+    : null;
+
+  return {
+    index,
+    displayIndex: index + 1,
+    use: true,
+    totalDistance,
+    totalTimerTime,
+    avgSpeed,
+    avgPower,
+    records: lapRecords
+  };
+}
+
 function normaliseFitDataFromFitParser(data){
-  const lapsRaw = Array.isArray(data.laps) ? data.laps : [];
+  const sessions = extractSessions(data);
   const laps = [];
   const allRecords = [];
 
-  lapsRaw.forEach((lap, idx) => {
-    const lapRecsRaw = Array.isArray(lap.records) ? lap.records : [];
-    const lapRecords = lapRecsRaw.map(normaliseRecord);
-    addGradeFromAlt(lapRecords);
+  let lapIndex = 0;
 
-    const total_distance = toNumber(lap.total_distance) ?? toNumber(lap.total_distance_m);
-    const total_timer_time = toNumber(lap.total_timer_time);
-    const avg_speed = toNumber(lap.avg_speed);
-    const avg_power = toNumber(lap.avg_power);
+  sessions.forEach(session => {
+    const lapsRaw = Array.isArray(session.laps) ? session.laps : [];
+    if (lapsRaw.length){
+      lapsRaw.forEach(lap => {
+        const lapRecsRaw = Array.isArray(lap.records) ? lap.records : [];
+        const lapRecords = lapRecsRaw.map(normaliseRecord);
+        const normalisedLap = buildLapFromRecords(lapRecords, lapIndex++);
+        // If parser already gave totals, prefer them
+        const total_distance = toNumber(lap.total_distance) ?? toNumber(lap.total_distance_m);
+        const total_timer_time = toNumber(lap.total_timer_time);
+        const avg_speed = toNumber(lap.avg_speed);
+        const avg_power = toNumber(lap.avg_power);
 
-    laps.push({
-      index: idx,
-      displayIndex: idx + 1,
-      use: true,
-      totalDistance: total_distance,
-      totalTimerTime: total_timer_time,
-      avgSpeed: avg_speed,
-      avgPower: avg_power,
-      records: lapRecords
-    });
+        if (total_distance != null) normalisedLap.totalDistance = total_distance;
+        if (total_timer_time != null) normalisedLap.totalTimerTime = total_timer_time;
+        if (avg_speed != null) normalisedLap.avgSpeed = avg_speed;
+        if (avg_power != null) normalisedLap.avgPower = avg_power;
 
-    allRecords.push(...lapRecords);
+        laps.push(normalisedLap);
+        allRecords.push(...normalisedLap.records);
+      });
+    } else if (Array.isArray(session.records) && session.records.length){
+      // Session with records but no explicit laps: treat as one big lap
+      const lapRecords = session.records.map(normaliseRecord);
+      const normalisedLap = buildLapFromRecords(lapRecords, lapIndex++);
+      laps.push(normalisedLap);
+      allRecords.push(...normalisedLap.records);
+    }
   });
 
-  // Fallback: if there are no laps but there are root records
-  if (laps.length === 0 && Array.isArray(data.records)){
+  // Final fallback: if nothing above gave laps but there is a root records array
+  if (!laps.length && Array.isArray(data.records) && data.records.length){
     const rootRecs = data.records.map(normaliseRecord);
-    addGradeFromAlt(rootRecs);
-    laps.push({
-      index: 0,
-      displayIndex: 1,
-      use: true,
-      totalDistance: rootRecs[rootRecs.length-1]?.distance ?? null,
-      totalTimerTime: null,
-      avgSpeed: null,
-      avgPower: null,
-      records: rootRecs
-    });
-    allRecords.push(...rootRecs);
+    const normalisedLap = buildLapFromRecords(rootRecs, 0);
+    laps.push(normalisedLap);
+    allRecords.push(...normalisedLap.records);
   }
 
   return { laps, records: allRecords };
@@ -777,32 +823,24 @@ function runFitAnalysis(){
 
   // Collect records from selected laps
   let records = [];
+  const checkboxes = document.querySelectorAll(".lap-use");
+  const idxSet = new Set();
+  checkboxes.forEach(cb => {
+    if (cb.checked){
+      const idx = Number(cb.getAttribute("data-lap-index"));
+      idxSet.add(idx);
+    }
+  });
+
   if (mode === "laps"){
-    const checkboxes = document.querySelectorAll(".lap-use");
-    const idxSet = new Set();
-    checkboxes.forEach(cb => {
-      if (cb.checked){
-        const idx = Number(cb.getAttribute("data-lap-index"));
-        idxSet.add(idx);
-      }
-    });
     currentFitData.laps.forEach(lap => {
       if (idxSet.has(lap.index)){
         records.push(...lap.records);
       }
     });
   } else {
-    // race mode: all laps that passed default "use" threshold
-    const checkboxes = document.querySelectorAll(".lap-use");
-    const idxSet = new Set();
-    checkboxes.forEach(cb => {
-      if (cb.checked){
-        const idx = Number(cb.getAttribute("data-lap-index"));
-        idxSet.add(idx);
-      }
-    });
+    // race mode: use checked laps; if user unticks everything, fall back to all
     if (idxSet.size === 0){
-      // if user unticked everything, fall back to all
       records = currentFitData.records.slice();
     } else {
       currentFitData.laps.forEach(lap => {
