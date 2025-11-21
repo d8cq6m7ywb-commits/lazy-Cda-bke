@@ -672,11 +672,7 @@ function addGradeFromAlt(records){
   records[0].grade = records[1].grade;
 }
 
-/**
- * Lap-aware normaliser:
- *  - Prefer real Garmin laps (from the lap button) wherever present.
- *  - Fall back to a single synthetic lap if the file has records but no laps.
- */
+// --- THIS IS THE KEY FUNCTION (restored version) ---
 function normaliseFitDataFromFitParser(data){
   // Try multiple shapes to be robust
   let lapsRaw = [];
