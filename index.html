@@ -673,49 +673,45 @@ function addGradeFromAlt(records){
 }
 
 /**
- * NEW: super-robust normaliser.
- * - Collects all records from any common place in the parsed FIT data.
- * - Builds ONE synthetic lap containing all those records.
+ * SUPER-ROBUST normaliser:
+ * Recursively collects every `records` / `record` array anywhere in the parsed FIT object,
+ * then builds one synthetic lap containing all records.
  */
 function normaliseFitDataFromFitParser(data){
-  let rawRecords = [];
-
-  // Common locations
-  if (Array.isArray(data.records)) {
-    rawRecords = rawRecords.concat(data.records);
-  }
-  if (Array.isArray(data.record)) {
-    rawRecords = rawRecords.concat(data.record);
-  }
-
-  // Sometimes records are under sessions[]
-  if (Array.isArray(data.sessions)) {
-    data.sessions.forEach(s => {
-      if (Array.isArray(s.records)) {
-        rawRecords = rawRecords.concat(s.records);
+  function collectAllRecords(node, out){
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)){
+      for (const item of node) collectAllRecords(item, out);
+      return;
+    }
+    for (const key in node){
+      if (!Object.prototype.hasOwnProperty.call(node, key)) continue;
+      const val = node[key];
+      if ((key === "records" || key === "record") && Array.isArray(val)){
+        out.push(...val);
+      } else {
+        collectAllRecords(val, out);
       }
-    });
+    }
   }
 
-  // Defensive: some shapes use activity.records
-  if (!rawRecords.length && data.activity && Array.isArray(data.activity.records)) {
-    rawRecords = rawRecords.concat(data.activity.records);
-  }
+  const rawRecords = [];
+  collectAllRecords(data, rawRecords);
 
   const records = rawRecords.map(normaliseRecord);
-  if (records.length) {
+  if (records.length){
     addGradeFromAlt(records);
   }
 
   const laps = [];
 
-  if (records.length) {
+  if (records.length){
     const first = records[0];
     const last  = records[records.length - 1];
 
     let totalDistance = null;
-    if (last.distance != null) {
-      if (first.distance != null && last.distance >= first.distance) {
+    if (last.distance != null){
+      if (first.distance != null && last.distance >= first.distance){
         totalDistance = last.distance - first.distance;
       } else {
         totalDistance = last.distance;
@@ -723,13 +719,13 @@ function normaliseFitDataFromFitParser(data){
     }
 
     let totalTimerTime = null;
-    if (first.t && last.t) {
+    if (first.t && last.t){
       totalTimerTime = (last.t - first.t) / 1000; // seconds
     }
 
     let sumP = 0, nP = 0;
-    for (const r of records) {
-      if (r.power != null && isFinite(r.power)) {
+    for (const r of records){
+      if (r.power != null && isFinite(r.power)){
         sumP += r.power;
         nP++;
       }
@@ -742,7 +738,7 @@ function normaliseFitDataFromFitParser(data){
       use: true,
       totalDistance: totalDistance,
       totalTimerTime: totalTimerTime,
-      avgSpeed: null,   // will be derived in renderLapTable if dist/time exist
+      avgSpeed: null,
       avgPower: avgPower,
       records: records
     });
@@ -774,12 +770,10 @@ function renderLapTable(laps){
     const timeMin = lap.totalTimerTime != null ? (lap.totalTimerTime / 60) : null;
     const useDefault = !maxDist || (lap.totalDistance && lap.totalDistance > 0.3*maxDist);
 
-    // Compute average speed from dist/time where possible
     let lapSpeedKmh = null;
     if (distKm != null && timeMin != null && timeMin > 0.01) {
-      lapSpeedKmh = distKm / (timeMin / 60); // km/h
+      lapSpeedKmh = distKm / (timeMin / 60);
     } else if (lap.avgSpeed != null) {
-      // Assume avgSpeed is in m/s as per fit-file-parser options
       lapSpeedKmh = lap.avgSpeed * 3.6;
     }
 
