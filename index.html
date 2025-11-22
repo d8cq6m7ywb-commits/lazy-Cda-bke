@@ -326,7 +326,7 @@ hr.section-split{
     <h3 style="margin-bottom:8px;font-size:18px;color:#083258;">Laps in file</h3>
     <div class="helper">
       Tick the laps you want to include in the analysis (e.g. exclude warm-up, U-turn faff, etc.).
-      In Race mode the whole file is used regardless of the tick boxes.
+      In Race mode the whole file is used regardless of the tick boxes; they are shown for info only.
     </div>
     <div style="max-height:220px;overflow:auto;margin-top:8px;">
       <table id="lapTable">
@@ -487,6 +487,11 @@ document.addEventListener("DOMContentLoaded", function(){
   if (fitInput) {
     fitInput.addEventListener("change", handleFitFileSelect);
   }
+
+  const modeSel = document.getElementById("analysisMode");
+  if (modeSel){
+    modeSel.addEventListener("change", syncLapCheckboxMode);
+  }
 });
 
 function resetValues(){
@@ -646,6 +651,7 @@ function handleFitFileSelect(evt){
         statusEl.textContent =
           `Parsed ${currentFitData.records.length} records, ${currentFitData.laps.length} laps.`;
         renderLapTable(currentFitData.laps);
+        syncLapCheckboxMode();   // ensure race vs lap visual state after load
       });
     } catch(err){
       console.error(err);
@@ -944,6 +950,22 @@ function renderLapTable(laps){
       <td>${lap.avgPower != null ? lap.avgPower.toFixed(0) + " W" : "–"}</td>
     `;
     body.appendChild(tr);
+  });
+}
+
+/** Force all laps checked + disabled in race mode; re-enable in lap mode */
+function syncLapCheckboxMode(){
+  const modeSel = document.getElementById("analysisMode");
+  if (!modeSel) return;
+  const mode = modeSel.value;
+  const checkboxes = document.querySelectorAll(".lap-use");
+  checkboxes.forEach(cb => {
+    if (mode === "race"){
+      cb.checked = true;
+      cb.disabled = true;
+    } else {
+      cb.disabled = false; // keep existing checked state so user choices persist
+    }
   });
 }
 
