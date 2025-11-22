@@ -291,7 +291,7 @@ hr.section-split{
       <label class="label__calc">Analysis mode</label>
     </div>
     <select id="analysisMode" class="input__calc">
-      <option value="race" selected>Race / whole file (use all usable laps)</option>
+      <option value="race" selected>Race / whole file (use all usable data)</option>
       <option value="laps">Lap-based test (only selected laps)</option>
     </select>
 
@@ -309,6 +309,10 @@ hr.section-split{
       • Ignores |grade| &gt; 6%<br>
       • Discards CdA &lt; 0.10 or &gt; 0.50 as outliers
     </div>
+    <div class="helper" style="margin-top:10px;font-size:0.8em;">
+      Portions of the FIT parsing and CdA batch logic are adapted from existing open-source
+      implementations; keep the original license / attribution with this file.
+    </div>
 
     <div class="button-row" style="justify-content:flex-start;margin-top:16px;">
       <button class="btn-blue" type="button" onclick="runFitAnalysis()">Run CdA analysis</button>
@@ -322,6 +326,7 @@ hr.section-split{
     <h3 style="margin-bottom:8px;font-size:18px;color:#083258;">Laps in file</h3>
     <div class="helper">
       Tick the laps you want to include in the analysis (e.g. exclude warm-up, U-turn faff, etc.).
+      In Race mode the whole file is used regardless of the tick boxes.
     </div>
     <div style="max-height:220px;overflow:auto;margin-top:8px;">
       <table id="lapTable">
@@ -372,8 +377,16 @@ hr.section-split{
 <script>
 // ---------- SINGLE-POINT CDA CALCULATOR ----------
 function switchUnit(){ calculateResult(); }
-function showWarning(msg){ const w=document.getElementById("warn"); w.textContent=msg; w.style.display="block"; }
-function clearWarning(){ const w=document.getElementById("warn"); w.style.display="none"; w.textContent=""; }
+function showWarning(msg){
+  const w=document.getElementById("warn");
+  w.textContent=msg;
+  w.style.display="block";
+}
+function clearWarning(){
+  const w=document.getElementById("warn");
+  w.style.display="none";
+  w.textContent="";
+}
 
 function calculateResult(){
   clearWarning();
@@ -399,7 +412,9 @@ function calculateResult(){
     distance*=1.60934; climb/=3.28084; wind*=1.60934;
   }
 
-  let timeH=(+document.getElementById("hh").value||0)+(+document.getElementById("mm").value||0)/60+(+document.getElementById("ss").value||0)/3600;
+  let timeH=(+document.getElementById("hh").value||0)
+           +(+document.getElementById("mm").value||0)/60
+           +(+document.getElementById("ss").value||0)/3600;
   timeH=Math.max(timeH,0.0001);
 
   let power=+document.getElementById("power").value||0;
@@ -421,7 +436,9 @@ function calculateResult(){
   // Standard atmosphere (troposphere) unless overridden
   const P0=101325, T0=288.15, L=0.0065, M=0.0289652, R=8.314462618;
   const Tkelvin=tempC+273.15;
-  const pressurePa=(pressureOverride>0) ? pressureOverride*100 : P0*Math.pow(1-(L*altitude)/T0,(g*M)/(R*L));
+  const pressurePa=(pressureOverride>0)
+    ? pressureOverride*100
+    : P0*Math.pow(1-(L*altitude)/T0,(g*M)/(R*L));
 
   // Air density: dry default; adjust for humidity if provided
   let rho=(M*pressurePa)/(R*Tkelvin); // dry
@@ -453,10 +470,14 @@ function calculateResult(){
   }
 
   // Outputs
-  document.getElementById("speed").textContent = `${speedKmH.toFixed(2)} ${unit==='imperial' ? 'mph' : 'km/h'}`;
-  document.getElementById("slopeGrade").textContent = (slopeFraction*100).toFixed(4)+" %";
-  document.getElementById("rhoUsed").textContent = `${rho.toFixed(4)} kg/m³`;
-  document.getElementById("pressureUsed").textContent = `${(pressurePa/100).toFixed(1)} hPa`;
+  document.getElementById("speed").textContent =
+    `${speedKmH.toFixed(2)} ${unit==='imperial' ? 'mph' : 'km/h'}`;
+  document.getElementById("slopeGrade").textContent =
+    (slopeFraction*100).toFixed(4)+" %";
+  document.getElementById("rhoUsed").textContent =
+    `${rho.toFixed(4)} kg/m³`;
+  document.getElementById("pressureUsed").textContent =
+    `${(pressurePa/100).toFixed(1)} hPa`;
 }
 
 document.addEventListener("DOMContentLoaded", function(){
@@ -465,11 +486,6 @@ document.addEventListener("DOMContentLoaded", function(){
   const fitInput = document.getElementById("fitFileInput");
   if (fitInput) {
     fitInput.addEventListener("change", handleFitFileSelect);
-  }
-
-  const modeSel = document.getElementById("analysisMode");
-  if (modeSel) {
-    modeSel.addEventListener("change", updateLapCheckboxState);
   }
 });
 
@@ -530,7 +546,9 @@ function getEnvParamsForSamples(){
 
   const P0=101325, T0=288.15, L=0.0065, M=0.0289652, R=8.314462618;
   const Tkelvin=tempC+273.15;
-  const pressurePa=(pressureOverride>0) ? pressureOverride*100 : P0*Math.pow(1-(L*altitude)/T0,(g*M)/(R*L));
+  const pressurePa=(pressureOverride>0)
+    ? pressureOverride*100
+    : P0*Math.pow(1-(L*altitude)/T0,(g*M)/(R*L));
 
   let rho=(M*pressurePa)/(R*Tkelvin); // dry
   if(rhPct!==null){
@@ -625,9 +643,9 @@ function handleFitFileSelect(evt){
           return;
         }
         currentFitData = normaliseFitDataFromFitParser(data);
-        statusEl.textContent = `Parsed ${currentFitData.records.length} records, ${currentFitData.laps.length} laps.`;
+        statusEl.textContent =
+          `Parsed ${currentFitData.records.length} records, ${currentFitData.laps.length} laps.`;
         renderLapTable(currentFitData.laps);
-        updateLapCheckboxState();   // enforce mode behaviour after table is built
       });
     } catch(err){
       console.error(err);
@@ -680,12 +698,14 @@ function addGradeFromAlt(records){
 
 /**
  * Normaliser:
- * 1) Collects all records into a flat array.
- * 2) Tries to reconstruct laps from lap data (if present).
- * 3) Falls back to a single synthetic lap if no usable laps found.
+ * 1) Collect all records into a flat array.
+ * 2) Try to reconstruct laps from lap objects (Garmin etc.).
+ * 3) Fall back to a single synthetic lap if needed.
  */
+// Portions of the FIT parsing / CdA logic are adapted from open-source implementations;
+// keep the original license / attribution with this file.
 function normaliseFitDataFromFitParser(data){
-  // --- collect all records anywhere in the parsed object ---
+  // collect all records
   function collectAllRecords(node, out){
     if (!node || typeof node !== "object") return;
     if (Array.isArray(node)){
@@ -711,7 +731,7 @@ function normaliseFitDataFromFitParser(data){
     addGradeFromAlt(records);
   }
 
-  // --- collect lap-like objects if they exist ---
+  // collect lap-like objects
   function looksLikeLap(obj){
     if (!obj || typeof obj !== "object") return false;
     const hasDist = ("total_distance" in obj) || ("total_timer_distance" in obj);
@@ -742,8 +762,7 @@ function normaliseFitDataFromFitParser(data){
   let laps = [];
 
   if (records.length){
-    if (lapCandidates.length >= 2){
-      // build laps from candidates
+    if (lapCandidates.length >= 1){
       const normLaps = lapCandidates.map((lap) => {
         const startRaw = lap.start_time || lap.timestamp || null;
         const start = startRaw ? new Date(startRaw) : null;
@@ -771,10 +790,9 @@ function normaliseFitDataFromFitParser(data){
         };
       }).filter(l => l.start);
 
-      // sort by start time
       normLaps.sort((a,b) => a.start - b.start);
 
-      // fill missing ends from next start or last record
+      // fill missing ends
       for (let i=0; i<normLaps.length; i++){
         if (!normLaps[i].end){
           const next = normLaps[i+1];
@@ -789,7 +807,6 @@ function normaliseFitDataFromFitParser(data){
         lastLap.end = lastRecTime;
       }
 
-      // map records into each lap
       laps = normLaps.map((lap, idx) => {
         const lapRecs = records.filter(r =>
           r.t && lap.start && lap.end && r.t >= lap.start && r.t <= lap.end
@@ -844,7 +861,7 @@ function normaliseFitDataFromFitParser(data){
       }).filter(l => l.records.length > 0);
     }
 
-    // Fallback: single synthetic lap if we didn't get any usable lap splits
+    // Fallback: single synthetic lap if no usable lap splits
     if (!laps.length){
       const first = records[0];
       const last  = records[records.length - 1];
@@ -927,25 +944,6 @@ function renderLapTable(laps){
       <td>${lap.avgPower != null ? lap.avgPower.toFixed(0) + " W" : "–"}</td>
     `;
     body.appendChild(tr);
-  });
-}
-
-/**
- * Enforce UI behaviour by mode:
- * - race: all checkboxes checked & disabled
- * - laps: checkboxes enabled (user can choose)
- */
-function updateLapCheckboxState(){
-  const mode = document.getElementById("analysisMode").value;
-  const checkboxes = document.querySelectorAll(".lap-use");
-  checkboxes.forEach(cb => {
-    if (mode === "race"){
-      cb.checked = true;
-      cb.disabled = true;
-    } else {
-      cb.disabled = false;
-      // keep whatever checked state user had
-    }
   });
 }
 
@@ -1077,20 +1075,28 @@ function analyseCdAFromRecords(records, env, cfg){
   const raceSummary = summarise(raceFlat);
   const climbSummary = summarise(climbRelaxed);
 
-  function summariseHighSpeed(list){
-    const filtered = list.filter(p => p.v_kmh >= 24);
+  function summariseHighSpeed(list, minSpeed){
+    const filtered = list.filter(p => p.v_kmh >= minSpeed);
     if (!filtered.length) return {n:0, median:null, p25:null, p75:null};
     return summarise(filtered);
   }
-  const raceHigh = summariseHighSpeed(raceFlat);
-  const climbHigh = summariseHighSpeed(climbRelaxed);
+
+  const raceHigh24 = summariseHighSpeed(raceFlat,24);
+  const raceHigh30 = summariseHighSpeed(raceFlat,30);
+  const raceHigh35 = summariseHighSpeed(raceFlat,35);
+  const raceHigh40 = summariseHighSpeed(raceFlat,40);
+
+  const climbHigh = summariseHighSpeed(climbRelaxed,24);
 
   return {
     countAll: cdasAll.length,
     allSummary,
     raceSummary,
     climbSummary,
-    raceHigh,
+    raceHigh24,
+    raceHigh30,
+    raceHigh35,
+    raceHigh40,
     climbHigh,
     points
   };
@@ -1108,7 +1114,7 @@ function renderFitAnalysis(a, summaryEl, statsTable, statsBody){
     return;
   }
 
-  const estRace = a.raceHigh.median ?? a.raceSummary.median;
+  const estRace = a.raceHigh24.median ?? a.raceSummary.median;
   const estClimb = a.climbHigh.median ?? a.climbSummary.median;
 
   summaryEl.innerHTML =
@@ -1118,11 +1124,14 @@ function renderFitAnalysis(a, summaryEl, statsTable, statsBody){
     `Race flat samples: ${a.raceSummary.n}, climb samples: ${a.climbSummary.n}.</span>`;
 
   const rows = [
-    { label: "All usable",              s: a.allSummary,  note: "all grades" },
-    { label: "Race / flat",            s: a.raceSummary, note: "|grade| ≤ 1%" },
-    { label: "Race / flat, ≥24 km/h",  s: a.raceHigh,    note: "subset of race" },
-    { label: "Climb / relaxed",        s: a.climbSummary,note: "grade ≥ 2%" },
-    { label: "Climb / relaxed, ≥24 km/h", s: a.climbHigh,note: "subset of climb" }
+    { label: "All usable",                 s: a.allSummary,   note: "all grades" },
+    { label: "Race / flat",               s: a.raceSummary,  note: "|grade| ≤ 1%" },
+    { label: "Race / flat, ≥24 km/h",     s: a.raceHigh24,   note: "subset of race" },
+    { label: "Race / flat, ≥30 km/h",     s: a.raceHigh30,   note: "subset of race" },
+    { label: "Race / flat, ≥35 km/h",     s: a.raceHigh35,   note: "subset of race" },
+    { label: "Race / flat, ≥40 km/h",     s: a.raceHigh40,   note: "subset of race" },
+    { label: "Climb / relaxed",           s: a.climbSummary, note: "grade ≥ 2%" },
+    { label: "Climb / relaxed, ≥24 km/h", s: a.climbHigh,    note: "subset of climb" }
   ];
 
   statsBody.innerHTML = "";
