@@ -627,6 +627,7 @@ function handleFitFileSelect(evt){
         currentFitData = normaliseFitDataFromFitParser(data);
         statusEl.textContent = `Parsed ${currentFitData.records.length} records, ${currentFitData.laps.length} laps.`;
         renderLapTable(currentFitData.laps);
+        updateLapCheckboxState();   // enforce mode behaviour after table is built
       });
     } catch(err){
       console.error(err);
@@ -680,7 +681,7 @@ function addGradeFromAlt(records){
 /**
  * Normaliser:
  * 1) Collects all records into a flat array.
- * 2) Tries to reconstruct laps from Garmin lap data (if present).
+ * 2) Tries to reconstruct laps from lap data (if present).
  * 3) Falls back to a single synthetic lap if no usable laps found.
  */
 function normaliseFitDataFromFitParser(data){
@@ -887,17 +888,6 @@ function normaliseFitDataFromFitParser(data){
   return { laps, records };
 }
 
-// NEW: enable/disable lap checkboxes depending on mode
-function updateLapCheckboxState(){
-  const modeEl = document.getElementById("analysisMode");
-  if (!modeEl) return;
-  const mode = modeEl.value;
-  const checkboxes = document.querySelectorAll(".lap-use");
-  checkboxes.forEach(cb => {
-    cb.disabled = (mode === "race");
-  });
-}
-
 function renderLapTable(laps){
   const body = document.getElementById("lapTableBody");
   if (!body) return;
@@ -910,7 +900,6 @@ function renderLapTable(laps){
     td.style.textAlign = "center";
     tr.appendChild(td);
     body.appendChild(tr);
-    updateLapCheckboxState();
     return;
   }
 
@@ -939,8 +928,25 @@ function renderLapTable(laps){
     `;
     body.appendChild(tr);
   });
+}
 
-  updateLapCheckboxState();
+/**
+ * Enforce UI behaviour by mode:
+ * - race: all checkboxes checked & disabled
+ * - laps: checkboxes enabled (user can choose)
+ */
+function updateLapCheckboxState(){
+  const mode = document.getElementById("analysisMode").value;
+  const checkboxes = document.querySelectorAll(".lap-use");
+  checkboxes.forEach(cb => {
+    if (mode === "race"){
+      cb.checked = true;
+      cb.disabled = true;
+    } else {
+      cb.disabled = false;
+      // keep whatever checked state user had
+    }
+  });
 }
 
 function runFitAnalysis(){
