@@ -836,3 +836,10 @@ function renderFitScatter(points){
     }
   });
 }
+
+// Expose functions for inline HTML handlers (important if/when minifying)
+window.switchUnit          = switchUnit;
+window.calculateResult     = calculateResult;
+window.resetValues         = resetValues;
+window.runFitAnalysis      = runFitAnalysis;
+window.handleFitFileSelect = handleFitFileSelect;
