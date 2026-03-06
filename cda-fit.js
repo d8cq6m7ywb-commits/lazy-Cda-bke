@@ -209,6 +209,7 @@ function getEnvParamsForSamples() {
 let currentFitData = null;
 let fitScatterChart = null;
 let fitTimeChart = null;
+let fitHistogramChart = null;
 let lastAnalysis = null;   // store for CSV export
 
 function resolveFitParserCtor() {
@@ -561,9 +562,19 @@ function computeLapMedianCdA(lapRecords, env, cfg) {
   return cdas[Math.floor(cdas.length * 0.5)];
 }
 
-function renderLapTable(laps, env, cfg) {
+function renderLapTable(laps, env, cfg, preserveChecks) {
   const body = document.getElementById("lapTableBody");
   if (!body) return;
+
+  // Save current checkbox state before re-rendering
+  const savedChecks = {};
+  if (preserveChecks) {
+    document.querySelectorAll(".lap-use").forEach(cb => {
+      const idx = cb.getAttribute("data-lap-index");
+      savedChecks[idx] = cb.checked;
+    });
+  }
+
   body.innerHTML = "";
   if (!laps || !laps.length) {
     const tr = document.createElement("tr");
@@ -582,7 +593,14 @@ function renderLapTable(laps, env, cfg) {
     const tr = document.createElement("tr");
     const distKm = lap.totalDistance != null ? (lap.totalDistance / 1000) : null;
     const timeMin = lap.totalTimerTime != null ? (lap.totalTimerTime / 60) : null;
-    const useDefault = !maxDist || (lap.totalDistance && lap.totalDistance > 0.3 * maxDist);
+
+    // Use saved state if available, otherwise fall back to default heuristic
+    let isChecked;
+    if (preserveChecks && (String(lap.index) in savedChecks)) {
+      isChecked = savedChecks[String(lap.index)];
+    } else {
+      isChecked = !maxDist || (lap.totalDistance && lap.totalDistance > 0.3 * maxDist);
+    }
 
     let lapSpeedKmh = null;
     if (distKm != null && timeMin != null && timeMin > 0.01) {
@@ -600,7 +618,7 @@ function renderLapTable(laps, env, cfg) {
 
     tr.innerHTML = `
       <td>${lap.displayIndex}</td>
-      <td><input type="checkbox" class="lap-use" data-lap-index="${lap.index}" ${useDefault ? "checked" : ""}></td>
+      <td><input type="checkbox" class="lap-use" data-lap-index="${lap.index}" ${isChecked ? "checked" : ""}></td>
       <td>${distKm != null ? distKm.toFixed(2) : "\u2013"}</td>
       <td>${timeMin != null ? timeMin.toFixed(1) : "\u2013"}</td>
       <td>${lapSpeedKmh != null && isFinite(lapSpeedKmh) ? lapSpeedKmh.toFixed(1) + " km/h" : "\u2013"}</td>
@@ -731,11 +749,13 @@ function runFitAnalysis() {
     (smoothSec > 1 ? ` (${smoothSec}s smoothing).` : `.`);
 
   // Re-render lap table with per-lap CdA now that env/config are known
-  renderLapTable(currentFitData.laps, env, config);
+  // preserveChecks=true so user's tick selections are not overwritten
+  renderLapTable(currentFitData.laps, env, config, true);
   syncLapCheckboxMode();
 
   renderFitScatter(analysis);
   renderFitTimeSeries(analysis.points);
+  renderFitHistogram(analysis);
 }
 
 function isUsableRecord(rec, cfg) {
@@ -1131,17 +1151,221 @@ function renderFitTimeSeries(points) {
   });
 }
 
+// ---------- CDA HISTOGRAM ----------
+function renderFitHistogram(analysis) {
+  const canvas = document.getElementById("fitHistogram");
+  if (!canvas || !canvas.getContext) return;
+  const ctx = canvas.getContext("2d");
+
+  if (fitHistogramChart) fitHistogramChart.destroy();
+
+  const points = analysis.points;
+  if (!points.length) return;
+
+  // Separate CdA values by category
+  const raceCdas  = points.filter(p => p.cat === "race").map(p => p.cda);
+  const transCdas = points.filter(p => p.cat === "transition").map(p => p.cda);
+  const climbCdas = points.filter(p => p.cat === "climb").map(p => p.cda);
+  const allCdas   = points.map(p => p.cda);
+
+  if (!allCdas.length) return;
+
+  // Compute bin edges (fixed 0.005 bin width within a sensible range)
+  const binWidth = 0.005;
+  const minCda   = Math.floor(Math.min(...allCdas) / binWidth) * binWidth;
+  const maxCda   = Math.ceil(Math.max(...allCdas) / binWidth) * binWidth;
+  const binEdges = [];
+  for (let v = minCda; v < maxCda + binWidth * 0.5; v += binWidth) {
+    binEdges.push(Math.round(v * 1000) / 1000);  // avoid float imprecision
+  }
+
+  function binCounts(values) {
+    const counts = new Array(binEdges.length - 1).fill(0);
+    for (const v of values) {
+      const idx = Math.floor((v - minCda) / binWidth);
+      if (idx >= 0 && idx < counts.length) counts[idx]++;
+    }
+    return counts;
+  }
+
+  const raceHist  = binCounts(raceCdas);
+  const transHist = binCounts(transCdas);
+  const climbHist = binCounts(climbCdas);
+
+  // Build labels: bin centre values
+  const labels = [];
+  for (let i = 0; i < binEdges.length - 1; i++) {
+    labels.push(((binEdges[i] + binEdges[i + 1]) / 2).toFixed(3));
+  }
+
+  // Median line position
+  const medianCdA = analysis.raceHigh24.median ?? analysis.raceSummary.median;
+
+  fitHistogramChart = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          label: "Race / flat",
+          data: raceHist,
+          backgroundColor: "rgba(54,162,235,0.6)",
+          borderColor: "rgba(54,162,235,0.9)",
+          borderWidth: 1
+        },
+        {
+          label: "Transition (1\u20132%)",
+          data: transHist,
+          backgroundColor: "rgba(255,206,86,0.6)",
+          borderColor: "rgba(255,206,86,0.9)",
+          borderWidth: 1
+        },
+        {
+          label: "Climb / relaxed",
+          data: climbHist,
+          backgroundColor: "rgba(255,99,132,0.6)",
+          borderColor: "rgba(255,99,132,0.9)",
+          borderWidth: 1
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: {
+          title: { display: true, text: "CdA" },
+          ticks: {
+            maxTicksLimit: 20,
+            callback: function(value, index) {
+              // Show every other label to avoid crowding
+              return (index % 2 === 0) ? labels[index] : "";
+            }
+          },
+          stacked: true
+        },
+        y: {
+          title: { display: true, text: "Count" },
+          beginAtZero: true,
+          stacked: true
+        }
+      },
+      plugins: {
+        legend: { position: "top" },
+        title: {
+          display: true,
+          text: "CdA distribution (histogram)",
+          font: { size: 14 }
+        },
+        tooltip: {
+          callbacks: {
+            title: (items) => {
+              if (!items.length) return "";
+              const idx = items[0].dataIndex;
+              return `CdA ${binEdges[idx].toFixed(3)} – ${binEdges[idx + 1].toFixed(3)}`;
+            }
+          }
+        },
+        // Vertical median line via annotation plugin (fallback: skip if not available)
+        ...(typeof Chart !== "undefined" && Chart.registry &&
+            Chart.registry.plugins.get("annotation") ? {
+          annotation: {
+            annotations: {
+              medianLine: {
+                type: "line",
+                xMin: medianCdA,
+                xMax: medianCdA,
+                borderColor: "rgba(0,0,0,0.7)",
+                borderWidth: 2,
+                borderDash: [6, 3],
+                label: {
+                  display: true,
+                  content: `Median ${medianCdA != null ? medianCdA.toFixed(3) : ""}`,
+                  position: "start"
+                }
+              }
+            }
+          }
+        } : {})
+      }
+    }
+  });
+}
+
 // ---------- CSV EXPORT ----------
+
+/** Escape a CSV field: wrap in quotes if it contains commas, quotes, or newlines */
+function csvField(val) {
+  if (val == null) return "";
+  const s = String(val);
+  if (s.indexOf(",") !== -1 || s.indexOf('"') !== -1 || s.indexOf("\n") !== -1) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}
+function csvRow(fields) { return fields.map(csvField).join(","); }
+
 function exportStatsCSV() {
   if (!lastAnalysis || !lastAnalysis.countAll) {
     alert("No analysis results to export. Run the analysis first.");
     return;
   }
   const a = lastAnalysis;
+  const inp = readCommonInputs();
+  const cfg = readFilterConfig();
+
   function fmt(v) { return (v == null || !isFinite(v)) ? "" : v.toFixed(4); }
 
-  const rows = [
-    ["Category", "Samples", "Median CdA", "P25", "P75", "Note"],
+  const lines = [];
+
+  // --- Section 1: Metadata ---
+  const fitInput = document.getElementById("fitFileInput");
+  const fileName = (fitInput && fitInput.files && fitInput.files[0]) ? fitInput.files[0].name : "unknown";
+  const modeEl = document.getElementById("analysisMode");
+  const mode = modeEl ? modeEl.value : "";
+  const smoothEl = document.getElementById("smoothWindow");
+  const smoothSec = smoothEl ? smoothEl.value : "0";
+
+  lines.push(csvRow(["CdA Analysis Report"]));
+  lines.push(csvRow(["File", fileName]));
+  lines.push(csvRow(["Date", new Date().toISOString().slice(0, 19)]));
+  lines.push(csvRow(["Analysis mode", mode === "laps" ? "Lap-based" : "Race / whole file"]));
+  lines.push(csvRow(["Smoothing (s)", smoothSec]));
+  lines.push("");
+
+  // --- Section 2: Environment parameters ---
+  lines.push(csvRow(["ENVIRONMENT PARAMETERS"]));
+  lines.push(csvRow(["Parameter", "Value", "Unit"]));
+  lines.push(csvRow(["Altitude", inp.altitude, "m"]));
+  lines.push(csvRow(["Temperature", inp.tempC, "\u00b0C"]));
+  lines.push(csvRow(["Relative Humidity", inp.rhPct != null ? inp.rhPct : "not set", "%"]));
+  lines.push(csvRow(["Pressure (computed)", (inp.pressurePa / 100).toFixed(1), "hPa"]));
+  lines.push(csvRow(["Air density (rho)", inp.rho.toFixed(4), "kg/m\u00b3"]));
+  lines.push(csvRow(["Rider weight", inp.riderWeight.toFixed(1), "kg"]));
+  lines.push(csvRow(["Clothes & gear", inp.clothesGear.toFixed(1), "kg"]));
+  lines.push(csvRow(["Bike weight", inp.bikeWeight.toFixed(1), "kg"]));
+  lines.push(csvRow(["Total mass", inp.totalMass.toFixed(1), "kg"]));
+  lines.push(csvRow(["Crr", inp.crr, ""]));
+  lines.push(csvRow(["Drivetrain eff.", (inp.drivetrainEff * 100).toFixed(1), "%"]));
+  lines.push(csvRow(["Wind", inp.wind, "km/h"]));
+  lines.push(csvRow(["PM location", inp.pmLocation, ""]));
+  lines.push("");
+
+  // --- Section 3: Filter settings ---
+  lines.push(csvRow(["FILTER SETTINGS"]));
+  lines.push(csvRow(["Min speed", cfg.minSpeedKmh, "km/h"]));
+  lines.push(csvRow(["Max speed", cfg.maxSpeedKmh, "km/h"]));
+  lines.push(csvRow(["Min power", cfg.minPowerW, "W"]));
+  lines.push(csvRow(["Max power", cfg.maxPowerW, "W"]));
+  lines.push(csvRow(["Max |grade|", (cfg.maxAbsGrade * 100).toFixed(1), "%"]));
+  lines.push(csvRow(["Min CdA", cfg.minCdA, ""]));
+  lines.push(csvRow(["Max CdA", cfg.maxCdA, ""]));
+  lines.push("");
+
+  // --- Section 4: Summary statistics ---
+  lines.push(csvRow(["SUMMARY STATISTICS"]));
+  lines.push(csvRow(["Category", "Samples", "Median CdA", "P25", "P75", "Note"]));
+  const statRows = [
     ["All usable",             a.allSummary.n,    fmt(a.allSummary.median),    fmt(a.allSummary.p25),    fmt(a.allSummary.p75),    "all grades"],
     ["Race / flat",           a.raceSummary.n,   fmt(a.raceSummary.median),   fmt(a.raceSummary.p25),   fmt(a.raceSummary.p75),   "|grade| <= 1%"],
     ["Race / flat >= 24 km/h", a.raceHigh24.n,    fmt(a.raceHigh24.median),    fmt(a.raceHigh24.p25),    fmt(a.raceHigh24.p75),    "subset of race"],
@@ -1152,13 +1376,61 @@ function exportStatsCSV() {
     ["Climb / relaxed",       a.climbSummary.n,  fmt(a.climbSummary.median),  fmt(a.climbSummary.p25),  fmt(a.climbSummary.p75),  "grade > 2%"],
     ["Climb >= 24 km/h",      a.climbHigh.n,     fmt(a.climbHigh.median),     fmt(a.climbHigh.p25),     fmt(a.climbHigh.p75),     "subset of climb"]
   ];
+  statRows.forEach(r => lines.push(csvRow(r)));
+  lines.push("");
 
-  const csv = rows.map(r => r.join(",")).join("\n");
+  // --- Section 5: Per-lap summary ---
+  if (currentFitData && currentFitData.laps.length > 1) {
+    const env = getEnvParamsForSamples();
+    lines.push(csvRow(["PER-LAP SUMMARY"]));
+    lines.push(csvRow(["Lap #", "Used", "Dist (km)", "Time (min)", "Avg speed (km/h)", "Avg power (W)", "Median CdA"]));
+    currentFitData.laps.forEach((lap, i) => {
+      const distKm = lap.totalDistance != null ? (lap.totalDistance / 1000).toFixed(2) : "";
+      const timeMin = lap.totalTimerTime != null ? (lap.totalTimerTime / 60).toFixed(1) : "";
+      let avgSpeedKmh = "";
+      if (distKm && timeMin && +timeMin > 0.01) {
+        avgSpeedKmh = (+distKm / (+timeMin / 60)).toFixed(1);
+      } else if (lap.avgSpeed != null) {
+        avgSpeedKmh = (lap.avgSpeed * 3.6).toFixed(1);
+      }
+      const avgPow = lap.avgPower != null ? lap.avgPower.toFixed(0) : "";
+      let medCda = "";
+      if (lap.records && lap.records.length) {
+        const mc = computeLapMedianCdA(lap.records, env, cfg);
+        if (mc != null) medCda = mc.toFixed(4);
+      }
+      // Check if this lap was used
+      const cbSel = document.querySelector(`.lap-use[data-lap-index="${lap.index}"]`);
+      const used = cbSel ? (cbSel.checked ? "Yes" : "No") : "Yes";
+      lines.push(csvRow([lap.displayIndex, used, distKm, timeMin, avgSpeedKmh, avgPow, medCda]));
+    });
+    lines.push("");
+  }
+
+  // --- Section 6: Raw sample data ---
+  if (a.points && a.points.length) {
+    lines.push(csvRow(["RAW SAMPLE DATA"]));
+    lines.push(csvRow(["Time (min from start)", "Speed (km/h)", "CdA", "Grade (%)", "Power (W)", "Category"]));
+    const t0 = a.points[0].t ? a.points[0].t.getTime() : 0;
+    a.points.forEach(p => {
+      const tMin = p.t ? ((p.t.getTime() - t0) / 60000).toFixed(2) : "";
+      lines.push(csvRow([
+        tMin,
+        p.v_kmh.toFixed(1),
+        p.cda.toFixed(4),
+        ((p.grade || 0) * 100).toFixed(2),
+        p.power != null ? p.power.toFixed(0) : "",
+        p.cat
+      ]));
+    });
+  }
+
+  const csv = lines.join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = "cda-analysis.csv";
+  link.download = `cda-analysis-${fileName.replace(/\.[^.]+$/, "")}.csv`;
   link.click();
   URL.revokeObjectURL(url);
 }
