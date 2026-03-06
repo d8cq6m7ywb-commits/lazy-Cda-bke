@@ -350,7 +350,7 @@ hr.section-split{
     <div id="fitStatus" class="fit-status"></div>
   </div>
 
-  <!-- Right column: laps + results -->
+  <!-- Right column: laps only -->
   <div class="fit-card">
     <h3 style="margin-bottom:8px;font-size:18px;color:#083258;">Laps in file</h3>
     <div class="helper">
@@ -375,37 +375,38 @@ hr.section-split{
         </tbody>
       </table>
     </div>
+  </div>
+</div>
 
-    <div id="fitResults" style="margin-top:16px;">
-      <div class="fit-summary" id="fitSummary"></div>
-      <table class="fit-stats-table" id="fitStatsTable" style="display:none;">
-        <thead>
-          <tr>
-            <th>Category</th>
-            <th>Samples</th>
-            <th>Median CdA</th>
-            <th>P25–P75</th>
-            <th>Speed note</th>
-          </tr>
-        </thead>
-        <tbody id="fitStatsBody"></tbody>
-      </table>
-      <div style="margin-top:12px;position:relative;height:420px;">
-        <canvas id="fitScatter"></canvas>
-      </div>
-      <div style="margin-top:20px;position:relative;height:280px;">
-        <canvas id="fitTimeSeries"></canvas>
-      </div>
-      <div style="margin-top:20px;position:relative;height:320px;">
-        <canvas id="fitHistogram"></canvas>
-      </div>
-      <div id="lapBarChartWrap" style="margin-top:20px;position:relative;height:280px;display:none;">
-        <canvas id="fitLapBar"></canvas>
-      </div>
-      <div class="button-row" style="justify-content:flex-start;margin-top:12px;">
-        <button class="btn-blue" type="button" onclick="exportStatsCSV()" style="font-size:14px;padding:6px 14px;">Export stats CSV</button>
-      </div>
-    </div>
+<!-- Full-width results section below the two-column layout -->
+<div id="fitResults" class="fit-card" style="margin-top:20px;">
+  <div class="fit-summary" id="fitSummary"></div>
+  <table class="fit-stats-table" id="fitStatsTable" style="display:none;">
+    <thead>
+      <tr>
+        <th>Category</th>
+        <th>Samples</th>
+        <th>Median CdA</th>
+        <th>P25–P75</th>
+        <th>Speed note</th>
+      </tr>
+    </thead>
+    <tbody id="fitStatsBody"></tbody>
+  </table>
+  <div style="margin-top:12px;position:relative;height:420px;">
+    <canvas id="fitScatter"></canvas>
+  </div>
+  <div style="margin-top:20px;position:relative;height:280px;">
+    <canvas id="fitTimeSeries"></canvas>
+  </div>
+  <div style="margin-top:20px;position:relative;height:320px;">
+    <canvas id="fitHistogram"></canvas>
+  </div>
+  <div id="lapBarChartWrap" style="margin-top:20px;position:relative;height:280px;display:none;">
+    <canvas id="fitLapBar"></canvas>
+  </div>
+  <div class="button-row" style="justify-content:flex-start;margin-top:12px;">
+    <button class="btn-blue" type="button" onclick="exportStatsCSV()" style="font-size:14px;padding:6px 14px;">Export stats CSV</button>
   </div>
 </div>
 

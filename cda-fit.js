@@ -1480,9 +1480,9 @@ function renderLapBarChart(laps, env, cfg) {
       scales: {
         y: {
           title: { display: true, text: "CdA" },
-          // Tight range around values for visual comparison
-          suggestedMin: Math.max(0.10, Math.min(...lapCdas) - 0.02),
-          suggestedMax: Math.max(...lapCdas) + 0.02
+          // Forced tight range so small CdA differences are visually obvious
+          min: Math.floor((Math.min(...lapCdas) - 0.01) * 1000) / 1000,
+          max: Math.ceil((Math.max(...lapCdas) + 0.01) * 1000) / 1000
         }
       },
       plugins: {
