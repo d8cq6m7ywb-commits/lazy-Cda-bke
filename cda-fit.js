@@ -208,6 +208,8 @@ function getEnvParamsForSamples() {
 // ---------- FIT FILE CDA ANALYZER ----------
 let currentFitData = null;
 let fitScatterChart = null;
+let fitTimeChart = null;
+let lastAnalysis = null;   // store for CSV export
 
 function resolveFitParserCtor() {
   const w = window;
@@ -278,7 +280,7 @@ function handleFitFileSelect(evt) {
         currentFitData = normaliseFitDataFromFitParser(data);
         statusEl.textContent =
           `Parsed ${currentFitData.records.length} records, ${currentFitData.laps.length} laps.`;
-        renderLapTable(currentFitData.laps);
+        renderLapTable(currentFitData.laps, getEnvParamsForSamples(), readFilterConfig());
         syncLapCheckboxMode();
       });
     } catch(err) {
@@ -544,14 +546,29 @@ function normaliseFitDataFromFitParser(data) {
   return { laps, records };
 }
 
-function renderLapTable(laps) {
+// Compute median CdA for a single lap's records
+function computeLapMedianCdA(lapRecords, env, cfg) {
+  const cdas = [];
+  for (let i = 0; i < lapRecords.length; i++) {
+    const rec = lapRecords[i];
+    if (!isUsableRecord(rec, cfg)) continue;
+    const prevRec = (i > 0) ? lapRecords[i - 1] : null;
+    const cda = computeCdAForRecord(rec, prevRec, env);
+    if (isFinite(cda) && cda >= cfg.minCdA && cda <= cfg.maxCdA) cdas.push(cda);
+  }
+  if (!cdas.length) return null;
+  cdas.sort((a, b) => a - b);
+  return cdas[Math.floor(cdas.length * 0.5)];
+}
+
+function renderLapTable(laps, env, cfg) {
   const body = document.getElementById("lapTableBody");
   if (!body) return;
   body.innerHTML = "";
   if (!laps || !laps.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 6;
+    td.colSpan = 7;
     td.textContent = "No laps found in file.";
     td.style.textAlign = "center";
     tr.appendChild(td);
@@ -574,6 +591,13 @@ function renderLapTable(laps) {
       lapSpeedKmh = lap.avgSpeed * 3.6;
     }
 
+    // Per-lap median CdA
+    let lapCdaStr = "\u2013";
+    if (env && cfg && lap.records && lap.records.length) {
+      const med = computeLapMedianCdA(lap.records, env, cfg);
+      if (med != null) lapCdaStr = med.toFixed(3);
+    }
+
     tr.innerHTML = `
       <td>${lap.displayIndex}</td>
       <td><input type="checkbox" class="lap-use" data-lap-index="${lap.index}" ${useDefault ? "checked" : ""}></td>
@@ -581,6 +605,7 @@ function renderLapTable(laps) {
       <td>${timeMin != null ? timeMin.toFixed(1) : "\u2013"}</td>
       <td>${lapSpeedKmh != null && isFinite(lapSpeedKmh) ? lapSpeedKmh.toFixed(1) + " km/h" : "\u2013"}</td>
       <td>${lap.avgPower != null ? lap.avgPower.toFixed(0) + " W" : "\u2013"}</td>
+      <td>${lapCdaStr}</td>
     `;
     body.appendChild(tr);
   });
@@ -699,11 +724,18 @@ function runFitAnalysis() {
   const smoothed = smoothRecords(records, smoothSec);
 
   const analysis = analyseCdAFromRecords(smoothed, env, config);
+  lastAnalysis = analysis;   // store for CSV export
   renderFitAnalysis(analysis, summaryEl, statsTable, statsBody);
   statusEl.textContent =
     `Used ${analysis.countAll} samples after filtering` +
     (smoothSec > 1 ? ` (${smoothSec}s smoothing).` : `.`);
-  renderFitScatter(analysis.points);
+
+  // Re-render lap table with per-lap CdA now that env/config are known
+  renderLapTable(currentFitData.laps, env, config);
+  syncLapCheckboxMode();
+
+  renderFitScatter(analysis);
+  renderFitTimeSeries(analysis.points);
 }
 
 function isUsableRecord(rec, cfg) {
@@ -780,7 +812,12 @@ function analyseCdAFromRecords(records, env, cfg) {
     if (cat === "transition") transPoints.push({ cda, v_kmh });
 
     if (points.length < 4000) {
-      points.push({ cda, v_kmh, cat });
+      points.push({
+        cda, v_kmh, cat,
+        grade: grade,
+        power: rec.power,
+        t: rec.t
+      });
     }
   }
 
@@ -874,48 +911,254 @@ function renderFitAnalysis(a, summaryEl, statsTable, statsBody) {
   statsTable.style.display = "table";
 }
 
-function renderFitScatter(points) {
+function renderFitScatter(analysis) {
   const canvas = document.getElementById("fitScatter");
   if (!canvas || !canvas.getContext) return;
   const ctx = canvas.getContext("2d");
+  const points = analysis.points;
 
-  const racePoints  = points.filter(p => p.cat === "race").map(p => ({ x: p.v_kmh, y: p.cda }));
-  const transP      = points.filter(p => p.cat === "transition").map(p => ({ x: p.v_kmh, y: p.cda }));
-  const climbPoints = points.filter(p => p.cat === "climb").map(p => ({ x: p.v_kmh, y: p.cda }));
-
-  if (fitScatterChart) {
-    fitScatterChart.destroy();
+  // Build datasets with full metadata for tooltips
+  function mapPts(list) {
+    return list.map(p => ({
+      x: p.v_kmh, y: p.cda,
+      _grade: p.grade, _power: p.power
+    }));
   }
 
-  // FIX #7: show transition category as a third dataset
+  const racePoints  = mapPts(points.filter(p => p.cat === "race"));
+  const transP      = mapPts(points.filter(p => p.cat === "transition"));
+  const climbPoints = mapPts(points.filter(p => p.cat === "climb"));
+
+  if (fitScatterChart) fitScatterChart.destroy();
+
+  // Median CdA for the horizontal reference line
+  const medianCdA = analysis.raceHigh24.median ?? analysis.raceSummary.median;
+
+  // Build annotation for median line (if chartjs-plugin-annotation is not loaded, use a simple dataset)
+  const datasets = [
+    {
+      label: "Race / flat",
+      data: racePoints,
+      pointRadius: 3,
+      pointHoverRadius: 5,
+      backgroundColor: "rgba(54,162,235,0.4)",
+      borderColor: "rgba(54,162,235,0.7)"
+    },
+    {
+      label: "Transition (1\u20132%)",
+      data: transP,
+      pointRadius: 3,
+      pointHoverRadius: 5,
+      backgroundColor: "rgba(255,206,86,0.4)",
+      borderColor: "rgba(255,206,86,0.7)"
+    },
+    {
+      label: "Climb / relaxed",
+      data: climbPoints,
+      pointRadius: 3,
+      pointHoverRadius: 5,
+      backgroundColor: "rgba(255,99,132,0.4)",
+      borderColor: "rgba(255,99,132,0.7)"
+    }
+  ];
+
+  // Median reference line as a line dataset spanning the speed range
+  if (medianCdA != null && isFinite(medianCdA)) {
+    const allSpeeds = points.map(p => p.v_kmh);
+    const minSpd = Math.min(...allSpeeds);
+    const maxSpd = Math.max(...allSpeeds);
+    datasets.push({
+      label: `Median CdA ${medianCdA.toFixed(3)}`,
+      data: [{ x: minSpd, y: medianCdA }, { x: maxSpd, y: medianCdA }],
+      type: "line",
+      borderColor: "rgba(0,0,0,0.5)",
+      borderDash: [8, 4],
+      borderWidth: 2,
+      pointRadius: 0,
+      fill: false
+    });
+  }
+
+  // Zoom plugin config
+  const zoomOpts = (typeof Chart !== "undefined" && Chart.registry &&
+    Chart.registry.plugins.get("zoom"))
+    ? {
+        zoom: {
+          wheel: { enabled: true },
+          pinch: { enabled: true },
+          mode: "xy"
+        },
+        pan: {
+          enabled: true,
+          mode: "xy"
+        }
+      }
+    : {};
+
   fitScatterChart = new Chart(ctx, {
+    type: "scatter",
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: {
+          type: "linear",
+          title: { display: true, text: "Speed (km/h)" },
+          ticks: { stepSize: 5 }
+        },
+        y: {
+          title: { display: true, text: "CdA" },
+          suggestedMin: 0.15,
+          suggestedMax: 0.5
+        }
+      },
+      plugins: {
+        legend: { position: "top" },
+        tooltip: {
+          callbacks: {
+            label: (tipCtx) => {
+              const raw = tipCtx.raw;
+              if (!raw) return "";
+              const parts = [` ${raw.x.toFixed(1)} km/h, CdA ${raw.y.toFixed(3)}`];
+              if (raw._grade != null) parts.push(`grade ${(raw._grade * 100).toFixed(1)}%`);
+              if (raw._power != null) parts.push(`${raw._power.toFixed(0)} W`);
+              return parts.join("  |  ");
+            }
+          }
+        },
+        ...zoomOpts
+      }
+    }
+  });
+}
+
+// ---------- CDA OVER TIME CHART ----------
+function renderFitTimeSeries(points) {
+  const canvas = document.getElementById("fitTimeSeries");
+  if (!canvas || !canvas.getContext) return;
+  const ctx = canvas.getContext("2d");
+
+  if (fitTimeChart) fitTimeChart.destroy();
+
+  // Filter points that have timestamps
+  const timed = points.filter(p => p.t != null).sort((a, b) => a.t - b.t);
+  if (!timed.length) return;
+
+  const t0 = timed[0].t.getTime();
+
+  const raceT  = timed.filter(p => p.cat === "race").map(p => ({
+    x: (p.t.getTime() - t0) / 60000, y: p.cda
+  }));
+  const transT = timed.filter(p => p.cat === "transition").map(p => ({
+    x: (p.t.getTime() - t0) / 60000, y: p.cda
+  }));
+  const climbT = timed.filter(p => p.cat === "climb").map(p => ({
+    x: (p.t.getTime() - t0) / 60000, y: p.cda
+  }));
+
+  const zoomOpts = (typeof Chart !== "undefined" && Chart.registry &&
+    Chart.registry.plugins.get("zoom"))
+    ? {
+        zoom: {
+          wheel: { enabled: true },
+          pinch: { enabled: true },
+          mode: "xy"
+        },
+        pan: {
+          enabled: true,
+          mode: "xy"
+        }
+      }
+    : {};
+
+  fitTimeChart = new Chart(ctx, {
     type: "scatter",
     data: {
       datasets: [
-        { label: "Race / flat",      data: racePoints,  pointRadius: 2, backgroundColor: "rgba(54,162,235,0.5)" },
-        { label: "Transition (1-2%)", data: transP,      pointRadius: 2, backgroundColor: "rgba(255,206,86,0.5)" },
-        { label: "Climb / relaxed",  data: climbPoints, pointRadius: 2, backgroundColor: "rgba(255,99,132,0.5)" }
+        {
+          label: "Race / flat",
+          data: raceT,
+          pointRadius: 2,
+          backgroundColor: "rgba(54,162,235,0.4)"
+        },
+        {
+          label: "Transition",
+          data: transT,
+          pointRadius: 2,
+          backgroundColor: "rgba(255,206,86,0.4)"
+        },
+        {
+          label: "Climb / relaxed",
+          data: climbT,
+          pointRadius: 2,
+          backgroundColor: "rgba(255,99,132,0.4)"
+        }
       ]
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       scales: {
-        x: { type: "linear", title: { display: true, text: "Speed (km/h)" }, ticks: { stepSize: 5 } },
-        y: { title: { display: true, text: "CdA" }, suggestedMin: 0.15, suggestedMax: 0.5 }
+        x: {
+          type: "linear",
+          title: { display: true, text: "Time (minutes)" },
+        },
+        y: {
+          title: { display: true, text: "CdA" },
+          suggestedMin: 0.15,
+          suggestedMax: 0.5
+        }
       },
       plugins: {
         legend: { position: "top" },
+        title: {
+          display: true,
+          text: "CdA over time",
+          font: { size: 14 }
+        },
         tooltip: {
           callbacks: {
-            label: (ctx) => {
-              const x = ctx.parsed.x;
-              const y = ctx.parsed.y;
-              return ` ${x.toFixed(1)} km/h, CdA ${y.toFixed(3)}`;
+            label: (tipCtx) => {
+              const raw = tipCtx.raw;
+              return ` ${raw.x.toFixed(1)} min, CdA ${raw.y.toFixed(3)}`;
             }
           }
-        }
+        },
+        ...zoomOpts
       }
     }
   });
+}
+
+// ---------- CSV EXPORT ----------
+function exportStatsCSV() {
+  if (!lastAnalysis || !lastAnalysis.countAll) {
+    alert("No analysis results to export. Run the analysis first.");
+    return;
+  }
+  const a = lastAnalysis;
+  function fmt(v) { return (v == null || !isFinite(v)) ? "" : v.toFixed(4); }
+
+  const rows = [
+    ["Category", "Samples", "Median CdA", "P25", "P75", "Note"],
+    ["All usable",             a.allSummary.n,    fmt(a.allSummary.median),    fmt(a.allSummary.p25),    fmt(a.allSummary.p75),    "all grades"],
+    ["Race / flat",           a.raceSummary.n,   fmt(a.raceSummary.median),   fmt(a.raceSummary.p25),   fmt(a.raceSummary.p75),   "|grade| <= 1%"],
+    ["Race / flat >= 24 km/h", a.raceHigh24.n,    fmt(a.raceHigh24.median),    fmt(a.raceHigh24.p25),    fmt(a.raceHigh24.p75),    "subset of race"],
+    ["Race / flat >= 30 km/h", a.raceHigh30.n,    fmt(a.raceHigh30.median),    fmt(a.raceHigh30.p25),    fmt(a.raceHigh30.p75),    "subset of race"],
+    ["Race / flat >= 35 km/h", a.raceHigh35.n,    fmt(a.raceHigh35.median),    fmt(a.raceHigh35.p25),    fmt(a.raceHigh35.p75),    "subset of race"],
+    ["Race / flat >= 40 km/h", a.raceHigh40.n,    fmt(a.raceHigh40.median),    fmt(a.raceHigh40.p25),    fmt(a.raceHigh40.p75),    "subset of race"],
+    ["Transition",            a.transSummary.n,  fmt(a.transSummary.median),  fmt(a.transSummary.p25),  fmt(a.transSummary.p75),  "1% < |grade| <= 2%"],
+    ["Climb / relaxed",       a.climbSummary.n,  fmt(a.climbSummary.median),  fmt(a.climbSummary.p25),  fmt(a.climbSummary.p75),  "grade > 2%"],
+    ["Climb >= 24 km/h",      a.climbHigh.n,     fmt(a.climbHigh.median),     fmt(a.climbHigh.p25),     fmt(a.climbHigh.p75),     "subset of climb"]
+  ];
+
+  const csv = rows.map(r => r.join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "cda-analysis.csv";
+  link.click();
+  URL.revokeObjectURL(url);
 }

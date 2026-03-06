@@ -367,6 +367,7 @@ hr.section-split{
             <th>Time (min)</th>
             <th>Avg speed</th>
             <th>Avg power</th>
+            <th>Median CdA</th>
           </tr>
         </thead>
         <tbody id="lapTableBody">
@@ -389,8 +390,14 @@ hr.section-split{
         </thead>
         <tbody id="fitStatsBody"></tbody>
       </table>
-      <div style="margin-top:12px;">
-        <canvas id="fitScatter" height="180"></canvas>
+      <div style="margin-top:12px;position:relative;height:420px;">
+        <canvas id="fitScatter"></canvas>
+      </div>
+      <div style="margin-top:20px;position:relative;height:280px;">
+        <canvas id="fitTimeSeries"></canvas>
+      </div>
+      <div class="button-row" style="justify-content:flex-start;margin-top:12px;">
+        <button class="btn-blue" type="button" onclick="exportStatsCSV()" style="font-size:14px;padding:6px 14px;">Export stats CSV</button>
       </div>
     </div>
   </div>
@@ -400,6 +407,7 @@ hr.section-split{
 
 <!-- External libs -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2"></script>
 <script src="bundle.js"></script>
 <script src="cda-fit.js"></script>
 </body>
