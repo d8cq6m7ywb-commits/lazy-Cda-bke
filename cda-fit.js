@@ -196,12 +196,19 @@ function getEnvParamsForSamples() {
   const inp = readCommonInputs();   // FIX #1: uses shared air density + input reading
 
   return {
-    rho:        inp.rho,
+    rho:        inp.rho,           // fallback rho (used when record has no altitude)
     totalMass:  inp.totalMass,
     crr:        inp.crr,
     g:          PHYS.g,
     windMs:     inp.windMs,
-    powerAtWheelFactor: (inp.pmLocation === "crank") ? inp.drivetrainEff : 1
+    powerAtWheelFactor: (inp.pmLocation === "crank") ? inp.drivetrainEff : 1,
+    // FIX #8: carry temp/humidity so we can recompute rho per-sample from FIT altitude
+    tempC:           inp.tempC,
+    rhPct:           inp.rhPct,
+    pressureOverride: inp.pressureOverride,
+    // FIX #9: effective mass multiplier for kinetic term (wheel rotational inertia)
+    // Typical road bike: ~4% added effective mass for acceleration
+    kineticMassFactor: 1.04
   };
 }
 
@@ -210,6 +217,7 @@ let currentFitData = null;
 let fitScatterChart = null;
 let fitTimeChart = null;
 let fitHistogramChart = null;
+let fitLapBarChart = null;
 let lastAnalysis = null;   // store for CSV export
 
 function resolveFitParserCtor() {
@@ -756,6 +764,7 @@ function runFitAnalysis() {
   renderFitScatter(analysis);
   renderFitTimeSeries(analysis.points);
   renderFitHistogram(analysis);
+  renderLapBarChart(currentFitData.laps, env, config);
 }
 
 function isUsableRecord(rec, cfg) {
@@ -769,7 +778,7 @@ function isUsableRecord(rec, cfg) {
   return true;
 }
 
-// FIX #4 + #5: proper sin/cos for grade, acceleration term
+// FIX #4 + #5 + #8 + #9: proper sin/cos, acceleration, per-sample rho, rotational inertia
 function computeCdAForRecord(rec, prevRec, env) {
   const v_g   = rec.speed;
   const v_air = Math.max(0, v_g + env.windMs);
@@ -783,20 +792,30 @@ function computeCdAForRecord(rec, prevRec, env) {
   const crr = env.crr;
   const powerAtWheel = env.powerAtWheelFactor * rec.power;
 
+  // FIX #8: per-sample air density from FIT altitude when available
+  // Falls back to the constant UI-entered rho if record has no altitude
+  let rho = env.rho;
+  if (rec.altitude != null && isFinite(rec.altitude) && !env.pressureOverride) {
+    const localRho = computeAirDensity(rec.altitude, env.tempC, env.rhPct, 0);
+    rho = localRho.rho;
+  }
+
   const pRoll  = g * m * crr * cosTheta * v_g;
   const pClimb = g * m * sinTheta * v_g;   // FIX #4
 
-  // FIX #5: subtract kinetic power (acceleration)
+  // FIX #5 + #9: kinetic power with rotational inertia (effective mass ≈ 1.04×)
+  // Wheel rotational KE adds ~4% to translational inertia for acceleration terms
   let pKinetic = 0;
   if (prevRec && prevRec.speed != null && prevRec.t && rec.t) {
     const dt = (rec.t - prevRec.t) / 1000;
     if (dt > 0 && dt < 5) {
-      pKinetic = 0.5 * m * (v_g * v_g - prevRec.speed * prevRec.speed) / dt;
+      const m_eff = m * (env.kineticMassFactor || 1.04);
+      pKinetic = 0.5 * m_eff * (v_g * v_g - prevRec.speed * prevRec.speed) / dt;
     }
   }
 
   const pAero = powerAtWheel - pRoll - pClimb - pKinetic;
-  const denom = 0.5 * env.rho * v_air * v_air * v_g;
+  const denom = 0.5 * rho * v_air * v_air * v_g;
 
   if (denom <= 0 || pAero <= 0) return NaN;
   return pAero / denom;
@@ -808,6 +827,10 @@ function analyseCdAFromRecords(records, env, cfg) {
   const climbRelaxed = [];
   const transPoints  = [];       // FIX #7: "transition" grade 1-2%
   const points       = [];
+
+  // Power breakdown accumulators
+  let sumPTotal = 0, sumPRoll = 0, sumPClimb = 0, sumPKinetic = 0, sumPAero = 0;
+  let nPower = 0;
 
   for (let i = 0; i < records.length; i++) {
     const rec = records[i];
@@ -831,6 +854,31 @@ function analyseCdAFromRecords(records, env, cfg) {
     if (cat === "climb")      climbRelaxed.push({ cda, v_kmh });
     if (cat === "transition") transPoints.push({ cda, v_kmh });
 
+    // Power breakdown (recompute components for accumulation)
+    const v_g = rec.speed;
+    const v_air = Math.max(0, v_g + env.windMs);
+    const cosT = 1 / Math.sqrt(1 + grade * grade);
+    const sinT = grade * cosT;
+    const pWheel = env.powerAtWheelFactor * rec.power;
+    const pR = env.g * env.totalMass * env.crr * cosT * v_g;
+    const pC = env.g * env.totalMass * sinT * v_g;
+    let pK = 0;
+    if (prevRec && prevRec.speed != null && prevRec.t && rec.t) {
+      const dt = (rec.t - prevRec.t) / 1000;
+      if (dt > 0 && dt < 5) {
+        const mEff = env.totalMass * (env.kineticMassFactor || 1.04);
+        pK = 0.5 * mEff * (v_g * v_g - prevRec.speed * prevRec.speed) / dt;
+      }
+    }
+    let rho = env.rho;
+    if (rec.altitude != null && isFinite(rec.altitude) && !env.pressureOverride) {
+      rho = computeAirDensity(rec.altitude, env.tempC, env.rhPct, 0).rho;
+    }
+    const pA = 0.5 * rho * v_air * v_air * v_g * cda;
+
+    sumPTotal += pWheel; sumPRoll += pR; sumPClimb += pC;
+    sumPKinetic += pK; sumPAero += pA; nPower++;
+
     if (points.length < 4000) {
       points.push({
         cda, v_kmh, cat,
@@ -842,13 +890,16 @@ function analyseCdAFromRecords(records, env, cfg) {
   }
 
   function summarise(list) {
-    if (!list.length) return { n: 0, median: null, p25: null, p75: null };
+    if (!list.length) return { n: 0, median: null, p25: null, p75: null, mad: null };
     const vals = list.map(x => x.cda).slice().sort((a, b) => a - b);
     const n      = vals.length;
     const median = vals[Math.floor(n * 0.5)];
     const p25    = vals[Math.floor(n * 0.25)];
     const p75    = vals[Math.floor(n * 0.75)];
-    return { n, median, p25, p75 };
+    // MAD: median absolute deviation (robust spread measure)
+    const deviations = vals.map(v => Math.abs(v - median)).sort((a, b) => a - b);
+    const mad = deviations[Math.floor(n * 0.5)];
+    return { n, median, p25, p75, mad };
   }
 
   const allSummary   = summarise(cdasAll.map(x => ({ cda: x })));
@@ -858,7 +909,7 @@ function analyseCdAFromRecords(records, env, cfg) {
 
   function summariseHighSpeed(list, minSpeed) {
     const filtered = list.filter(p => p.v_kmh >= minSpeed);
-    if (!filtered.length) return { n: 0, median: null, p25: null, p75: null };
+    if (!filtered.length) return { n: 0, median: null, p25: null, p75: null, mad: null };
     return summarise(filtered);
   }
 
@@ -867,6 +918,30 @@ function analyseCdAFromRecords(records, env, cfg) {
   const raceHigh35 = summariseHighSpeed(raceFlat, 35);
   const raceHigh40 = summariseHighSpeed(raceFlat, 40);
   const climbHigh  = summariseHighSpeed(climbRelaxed, 24);
+
+  // Power breakdown averages
+  const powerBreakdown = nPower ? {
+    avgTotal:   sumPTotal / nPower,
+    avgRoll:    sumPRoll / nPower,
+    avgClimb:   sumPClimb / nPower,
+    avgKinetic: sumPKinetic / nPower,
+    avgAero:    sumPAero / nPower
+  } : null;
+
+  // Data quality score (0-100) based on sample count + spread consistency
+  function qualityScore(summary) {
+    if (!summary || !summary.n || summary.median == null) return null;
+    // Component 1: sample count (more samples = more confidence)
+    const countScore = Math.min(summary.n / 500, 1) * 40;  // max 40 pts at 500+ samples
+    // Component 2: IQR tightness relative to median (smaller = better)
+    const iqr = (summary.p75 || 0) - (summary.p25 || 0);
+    const iqrRatio = summary.median > 0 ? iqr / summary.median : 1;
+    const spreadScore = Math.max(0, 1 - iqrRatio / 0.8) * 40;  // max 40 pts when IQR/median < ~10%
+    // Component 3: MAD tightness (smaller = better)
+    const madRatio = (summary.mad != null && summary.median > 0) ? summary.mad / summary.median : 0.5;
+    const madScore = Math.max(0, 1 - madRatio / 0.4) * 20;  // max 20 pts
+    return Math.round(countScore + spreadScore + madScore);
+  }
 
   return {
     countAll: cdasAll.length,
@@ -879,7 +954,9 @@ function analyseCdAFromRecords(records, env, cfg) {
     raceHigh35,
     raceHigh40,
     climbHigh,
-    points
+    points,
+    powerBreakdown,
+    qualityScore: qualityScore(raceHigh24.n ? raceHigh24 : raceSummary)
   };
 }
 
@@ -898,11 +975,55 @@ function renderFitAnalysis(a, summaryEl, statsTable, statsBody) {
   const estRace  = a.raceHigh24.median ?? a.raceSummary.median;
   const estClimb = a.climbHigh.median  ?? a.climbSummary.median;
 
-  summaryEl.innerHTML =
-    `Estimated <strong>racing CdA</strong> (flat, \u226524 km/h where available): <strong>${fmt(estRace, 3)}</strong><br>` +
+  // Data quality badge
+  let qualityBadge = "";
+  if (a.qualityScore != null) {
+    const qs = a.qualityScore;
+    const qColor = qs >= 70 ? "#27ae60" : qs >= 40 ? "#f39c12" : "#c0392b";
+    const qLabel = qs >= 70 ? "Good" : qs >= 40 ? "Fair" : "Low";
+    qualityBadge = ` <span style="display:inline-block;padding:2px 8px;border-radius:10px;` +
+      `font-size:0.8em;font-weight:700;color:#fff;background:${qColor};" ` +
+      `title="Data quality score ${qs}/100 — based on sample count, IQR tightness, and MAD spread">` +
+      `${qLabel} (${qs}/100)</span>`;
+  }
+
+  let html =
+    `Estimated <strong>racing CdA</strong> (flat, \u226524 km/h where available): <strong>${fmt(estRace, 3)}</strong>${qualityBadge}<br>` +
     `Estimated <strong>climbing / relaxed CdA</strong>: <strong>${fmt(estClimb, 3)}</strong><br>` +
     `<span style="font-size:0.9em;color:#555;">${a.countAll} samples used after filtering. ` +
     `Race flat: ${a.raceSummary.n}, transition: ${a.transSummary.n}, climb: ${a.climbSummary.n}.</span>`;
+
+  // Power breakdown
+  if (a.powerBreakdown) {
+    const pb = a.powerBreakdown;
+    const total = pb.avgTotal || 1;
+    const pctAero = ((pb.avgAero / total) * 100).toFixed(0);
+    const pctRoll = ((pb.avgRoll / total) * 100).toFixed(0);
+    const pctClimb = ((pb.avgClimb / total) * 100).toFixed(0);
+    const pctKin  = ((Math.abs(pb.avgKinetic) / total) * 100).toFixed(0);
+    html += `<br><span style="font-size:0.88em;color:#555;">` +
+      `<strong>Avg power split:</strong> ` +
+      `Aero <strong>${pctAero}%</strong> (${pb.avgAero.toFixed(0)} W) · ` +
+      `Rolling <strong>${pctRoll}%</strong> (${pb.avgRoll.toFixed(0)} W) · ` +
+      `Climbing <strong>${pctClimb}%</strong> (${pb.avgClimb.toFixed(0)} W) · ` +
+      `Accel <strong>${pctKin}%</strong> (${Math.abs(pb.avgKinetic).toFixed(0)} W)</span>`;
+  }
+
+  // Yaw warning when wind is significant
+  const env = getEnvParamsForSamples();
+  if (a.points.length && Math.abs(env.windMs) > 0.1) {
+    const avgSpeed = a.points.reduce((s, p) => s + p.v_kmh, 0) / a.points.length;
+    const avgSpeedMs = avgSpeed / 3.6;
+    const windRatio = Math.abs(env.windMs) / avgSpeedMs;
+    if (windRatio > 0.15) {
+      html += `<br><span style="font-size:0.85em;color:#c0392b;font-style:italic;">` +
+        `\u26a0 Wind is ${(windRatio * 100).toFixed(0)}% of avg ground speed. ` +
+        `The reported CdA is an effective value at this yaw angle, not a zero-yaw tunnel value. ` +
+        `CdA typically increases with yaw.</span>`;
+    }
+  }
+
+  summaryEl.innerHTML = html;
 
   const rows = [
     { label: "All usable",                 s: a.allSummary,    note: "all grades" },
@@ -1287,6 +1408,95 @@ function renderFitHistogram(analysis) {
             }
           }
         } : {})
+      }
+    }
+  });
+}
+
+// ---------- PER-LAP CDA BAR CHART ----------
+function renderLapBarChart(laps, env, cfg) {
+  const canvas = document.getElementById("fitLapBar");
+  const wrap   = document.getElementById("lapBarChartWrap");
+  if (!canvas || !canvas.getContext || !wrap) return;
+
+  if (fitLapBarChart) fitLapBarChart.destroy();
+
+  // Only show for multi-lap files
+  if (!laps || laps.length < 2) { wrap.style.display = "none"; return; }
+
+  // Compute per-lap median CdA
+  const lapLabels = [];
+  const lapCdas   = [];
+  const lapColors = [];
+
+  // Check which laps are selected
+  const checkboxes = document.querySelectorAll(".lap-use");
+  const checkedSet = new Set();
+  checkboxes.forEach(cb => {
+    if (cb.checked) checkedSet.add(Number(cb.getAttribute("data-lap-index")));
+  });
+
+  laps.forEach(lap => {
+    if (!lap.records || !lap.records.length) return;
+    const med = computeLapMedianCdA(lap.records, env, cfg);
+    if (med == null) return;
+    lapLabels.push("Lap " + lap.displayIndex);
+    lapCdas.push(med);
+    // Highlight selected laps in blue, others greyed out
+    lapColors.push(checkedSet.has(lap.index)
+      ? "rgba(54,162,235,0.7)"
+      : "rgba(180,180,180,0.5)");
+  });
+
+  if (!lapCdas.length) { wrap.style.display = "none"; return; }
+
+  wrap.style.display = "block";
+  const ctx = canvas.getContext("2d");
+
+  // Median reference line across all selected laps
+  const selectedCdas = lapCdas.filter((_, i) => {
+    const lapIdx = laps.find(l => l.displayIndex === parseInt(lapLabels[i].replace("Lap ", "")))?.index;
+    return lapIdx != null && checkedSet.has(lapIdx);
+  });
+  const overallMedian = selectedCdas.length
+    ? selectedCdas.slice().sort((a, b) => a - b)[Math.floor(selectedCdas.length / 2)]
+    : null;
+
+  fitLapBarChart = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: lapLabels,
+      datasets: [{
+        label: "Median CdA per lap",
+        data: lapCdas,
+        backgroundColor: lapColors,
+        borderColor: lapColors.map(c => c.replace("0.7", "1").replace("0.5", "0.7")),
+        borderWidth: 1
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        y: {
+          title: { display: true, text: "CdA" },
+          // Tight range around values for visual comparison
+          suggestedMin: Math.max(0.10, Math.min(...lapCdas) - 0.02),
+          suggestedMax: Math.max(...lapCdas) + 0.02
+        }
+      },
+      plugins: {
+        legend: { display: false },
+        title: {
+          display: true,
+          text: "CdA comparison by lap (grey = not selected)",
+          font: { size: 14 }
+        },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => ` CdA: ${ctx.raw.toFixed(4)}`
+          }
+        }
       }
     }
   });
