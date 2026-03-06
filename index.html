@@ -301,14 +301,43 @@ hr.section-split{
     </div>
 
     <div class="label__row" style="margin-top:12px;">
-      <label class="label__calc">Sample filters (hard-coded for now)</label>
+      <label class="label__calc">Smoothing window (seconds)</label>
+      <span class="label__meta">reduces noise</span>
     </div>
-    <div class="helper">
-      • Ignores samples with speed &lt; 10 km/h or &gt; 65 km/h<br>
-      • Ignores power &lt; 80 W or &gt; 900 W<br>
-      • Ignores |grade| &gt; 6%<br>
-      • Discards CdA &lt; 0.10 or &gt; 0.50 as outliers
-    </div>
+    <select id="smoothWindow" class="input__calc">
+      <option value="0">None (raw 1 Hz)</option>
+      <option value="10">10 s</option>
+      <option value="30" selected>30 s (recommended)</option>
+      <option value="60">60 s</option>
+    </select>
+
+    <details style="margin-top:12px;">
+      <summary style="cursor:pointer;font-size:0.95em;color:#555;font-weight:500;">Sample filters (click to adjust)</summary>
+      <div style="display:grid;grid-template-columns:1fr 1fr;grid-gap:6px 12px;margin-top:8px;font-size:0.9em;">
+        <label>Min speed (km/h)
+          <input id="cfgMinSpeed" class="input__calc" type="number" value="10" style="padding:6px;">
+        </label>
+        <label>Max speed (km/h)
+          <input id="cfgMaxSpeed" class="input__calc" type="number" value="65" style="padding:6px;">
+        </label>
+        <label>Min power (W)
+          <input id="cfgMinPower" class="input__calc" type="number" value="80" style="padding:6px;">
+        </label>
+        <label>Max power (W)
+          <input id="cfgMaxPower" class="input__calc" type="number" value="900" style="padding:6px;">
+        </label>
+        <label>Max |grade| (%)
+          <input id="cfgMaxGrade" class="input__calc" type="number" value="6" step="0.5" style="padding:6px;">
+        </label>
+        <label>Min CdA
+          <input id="cfgMinCdA" class="input__calc" type="number" value="0.10" step="0.01" style="padding:6px;">
+        </label>
+        <label>Max CdA
+          <input id="cfgMaxCdA" class="input__calc" type="number" value="0.50" step="0.01" style="padding:6px;">
+        </label>
+      </div>
+    </details>
+
     <div class="helper" style="margin-top:10px;font-size:0.8em;">
       Portions of the FIT parsing and CdA batch logic are adapted from existing open-source
       implementations; keep the original license / attribution with this file.
@@ -372,6 +401,6 @@ hr.section-split{
 <!-- External libs -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="bundle.js"></script>
-<script src="cda-fit.min.js"></script>
+<script src="cda-fit.js"></script>
 </body>
 </html>
